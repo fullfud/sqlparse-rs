@@ -16,8 +16,13 @@ classifiers = [
     "Topic :: Database",
 ]
 
+[project.scripts]
+sqlformat-rs = "sqlparse_rs.__main__:main"
+
 [tool.maturin]
 manifest-path = "rust/sqlparse-front/Cargo.toml"
 python-source = "python"
 module-name = "sqlparse_rs._native"
 include = [{ path = "LICENSE", format = "sdist" }]
+# debug symbols a local Windows build leaves next to the module
+exclude = ["python/sqlparse_rs/*.pdb"]

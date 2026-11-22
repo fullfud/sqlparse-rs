@@ -11,3 +11,4 @@ rust/*/diff.err
 rust/*/python/*/_native.tmp-*
 dist/
 python/sqlparse_rs/_native*
+python/sqlparse_rs/*.pdb

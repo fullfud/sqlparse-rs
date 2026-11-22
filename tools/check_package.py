@@ -127,10 +127,8 @@ def fallbacks():
         ('indent_width=2**70', (sql,), {'reindent': True, 'indent_width': 2**70}),
         ('truncate_strings="3"', (sql,), {'truncate_strings': '3'}),
         ('keyword_case=Sub', (sql,), {'keyword_case': Sub('upper')}),
-        ('unknown option', (sql,), {'no_such_option': 1}),
         ('bytes', (sql.encode(),), {}),
         ('bytes + encoding', (sql.encode('utf-16'), 'utf-16'), {}),
-        ('str + encoding', (sql, 'utf-8'), {}),
         ('str subclass', (Sub(sql),), {'reindent': True}),
         # The two below do reach the Rust: the text cannot become UTF-8, the call raises UnicodeEncodeError before
         # any work, and the package hands it to sqlparse.
@@ -153,7 +151,7 @@ def fallbacks():
             bad += 1
     for name, args, kwargs in [('strip_semicolon=1', (sql,), {'strip_semicolon': 1}),
                                ('strip_semicolon=None', (sql,), {'strip_semicolon': None}),
-                               ('bytes', (sql.encode(),), {}), ('encoding', (sql, 'utf-8'), {})]:
+                               ('bytes', (sql.encode(),), {})]:
         before = native_calls()
         b = outcome(sqlparse_rs.split, *args, **kwargs)
         ran = native_calls() - before
@@ -161,7 +159,63 @@ def fallbacks():
         if ran:
             print('REACHED RUST', name)
             bad += 1
-    print(f'fallbacks: {len(cases) + 4} calls, all answered by sqlparse' if not bad else 'fallbacks: see above')
+    print(f'fallbacks: {len(cases) + 3} calls, all answered by sqlparse' if not bad else 'fallbacks: see above')
+
+
+def inert_arguments():
+    """What sqlparse never reads for a str: `encoding` (it only decodes bytes) and keywords that are no format
+    option (`indent_char` it overwrites). The package runs these in Rust, and they must give sqlparse's answer."""
+    global bad
+    sql = "select a, b from t where x = 1 -- note\n; select 'two'"
+    cases = [
+        ('format, encoding', sqlparse.format, sqlparse_rs.format, (sql, 'utf-16'), {'reindent': True}),
+        ('format, encoding object', sqlparse.format, sqlparse_rs.format, (sql, object()), {}),
+        ('format, unknown keyword', sqlparse.format, sqlparse_rs.format, (sql,), {'no_such_option': [1]}),
+        ('format, indent_char', sqlparse.format, sqlparse_rs.format, (sql,), {'reindent': True, 'indent_char': 'x'}),
+        ('format, CLI-style keywords', sqlparse.format, sqlparse_rs.format, (sql,),
+         {'filename': ['-'], 'outfile': None, 'inplace': False, 'encoding': 'utf-8', 'reindent': True,
+          'indent_char': ' ', 'keyword_case': 'upper'}),
+        ('split, encoding', sqlparse.split, sqlparse_rs.split, (sql, 'latin-1'), {}),
+    ]
+    for name, f_py, f_rs, args, kwargs in cases:
+        rearm()
+        before = native_calls()
+        b = outcome(f_rs, *args, **kwargs)
+        ran = native_calls() - before
+        same(name, outcome(f_py, *args, **kwargs), b)
+        if ran != 1:
+            print('NOT IN RUST', name)
+            bad += 1
+    print(f'inert arguments: {len(cases)} calls, all in Rust')
+
+
+def cli():
+    """`sqlformat-rs` against sqlparse's own `sqlformat`: same output, format() run in Rust."""
+    global bad
+    import contextlib, io, tempfile
+    from sqlparse import cli as sqlcli
+    import sqlparse_rs.__main__ as rscli
+    path = sorted(glob.glob(os.path.join(ROOT, 'bench', 'corpus', 'q*.sql')))[0]
+    for args in (['-r', '-k', 'upper', path], ['--reindent_aligned', '-s', path], ['-r', '--comma_first', 'True', path],
+                 ['-k', 'nope', path]):
+        outs = []
+        for main in (sqlcli.main, rscli.main):
+            rearm()
+            before = native_calls()
+            buf, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
+                try:
+                    code = main(list(args))
+                except SystemExit as e:  # argparse rejects a bad choice this way
+                    code = ('exit', e.code)
+            outs.append((code, buf.getvalue(), err.getvalue(), native_calls() - before))
+            sqlparse_rs.uninstall()
+        (c1, o1, e1, _), (c2, o2, e2, ran) = outs
+        same(f'cli {args[:-1]}', (c1, o1, e1), (c2, o2, e2))
+        if c1 == 0 and ran != 1:
+            print('CLI NOT IN RUST', args)
+            bad += 1
+    print('cli: done')
 
 
 def lexer_changes():
@@ -216,7 +270,9 @@ def installed():
 sys.setprofile(hook)
 corpus()
 fallbacks()
+inert_arguments()
 lexer_changes()
 installed()
+cli()
 sys.setprofile(None)
 print('mismatches', bad)

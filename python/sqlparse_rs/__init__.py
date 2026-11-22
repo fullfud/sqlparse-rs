@@ -12,12 +12,14 @@ The Rust is a port of sqlparse 0.6.1 checked call by call against it (see the pr
 the original sqlparse, unchanged, unless all of this holds:
 
 - the installed sqlparse is 0.6.1;
-- `sql` is a `str` (not bytes, not a subclass) and `encoding` is None;
+- `sql` is a `str` (not bytes, not a stream, not a subclass); `encoding` is then not used, as in sqlparse,
+  which only decodes bytes with it;
 - sqlparse's default lexer is as sqlparse sets it up (no add_keywords, set_SQL_REGEX, clear);
-- every option is one format() knows, with exactly the type the port takes: bool options are `bool` (not 0/1
-  or None), `indent_width`/`wrap_after` are `int` (not bool) and `truncate_strings`/`right_margin` `int` or
-  None, within 64 bits (`indent_width` at most 4096, see _INDENT_WIDTH_MAX), `keyword_case`/`identifier_case`/`output_format` `str` or None, `truncate_char` `str`;
-  split's `strip_semicolon` is a `bool`;
+- every format() option has exactly the type the port takes: bool options are `bool` (not 0/1 or None),
+  `indent_width`/`wrap_after` are `int` (not bool) and `truncate_strings`/`right_margin` `int` or None, within
+  64 bits (`indent_width` at most 4096, see _INDENT_WIDTH_MAX), `keyword_case`/`identifier_case`/`output_format`
+  `str` or None, `truncate_char` `str`; other keywords are dropped, as sqlparse never reads them (`indent_char`,
+  which it does read, it always overwrites from `indent_tabs`); split's `strip_semicolon` is a `bool`;
 - the text can be encoded as UTF-8 (a str with lone surrogates cannot).
 
 Errors are sqlparse's own: an invalid option value raises `sqlparse.exceptions.SQLParseError` with sqlparse's
@@ -66,29 +68,35 @@ _I64_MAX = 2**63 - 1
 _INDENT_WIDTH_MAX = 4096
 
 
-def _options_ported(options):
+def _ported_options(options):
+    """The options to give the Rust, or None when a call has to go to sqlparse. Keywords sqlparse does not read
+    are left out."""
+    unknown = False
     for name, value in options.items():
         kind = _OPTIONS.get(name)
+        if kind is None:
+            unknown = True
+            continue
         t = type(value)
         if kind is _BOOL:
             if t is not bool:
-                return False
+                return None
         elif kind is _OPT_STR:
             if value is not None and t is not str:
-                return False
+                return None
         elif kind is _STR:
             if t is not str:
-                return False
+                return None
         elif kind is _INT or kind is _OPT_INT:
             if kind is _OPT_INT and value is None:
                 continue
             if t is not int or not _I64_MIN <= value <= _I64_MAX:
-                return False
+                return None
             if name == 'indent_width' and value > _INDENT_WIDTH_MAX:
-                return False
-        else:
-            return False
-    return True
+                return None
+    if unknown:
+        return {name: value for name, value in options.items() if name in _OPTIONS}
+    return options
 
 
 # The default lexer as sqlparse sets it up, taken from a fresh Lexer on first use: the keyword dicts themselves
@@ -130,16 +138,11 @@ def _lexer_ported():
 
 def format(sql, encoding=None, **options):
     """sqlparse.format(): *sql* formatted according to *options* (see sqlparse's documentation)."""
-    if (
-        _ported
-        and type(sql) is str
-        and encoding is None
-        and _options_ported(options)
-        and _lexer_ported()
-    ):
+    ported = _ported_options(options) if _ported and type(sql) is str else None
+    if ported is not None and _lexer_ported():
         try:
             # Called from this frame: the Rust counts it in place of sqlparse.format's for the recursion limit.
-            return _native.format(sql, **options)
+            return _native.format(sql, **ported)
         except UnicodeEncodeError:
             pass
     return _original_format(sql, encoding, **options)
@@ -150,7 +153,6 @@ def split(sql, encoding=None, strip_semicolon=False):
     if (
         _ported
         and type(sql) is str
-        and encoding is None
         and type(strip_semicolon) is bool
         and _lexer_ported()
     ):
