@@ -28,6 +28,44 @@ mod tree;
 #[rustfmt::skip]
 mod pyunicode_tables;
 
+/// Not part of the front door: `tokenize` as (token type, text) pairs, for the package's lexer.
+pub fn lex(text: &str) -> Vec<(&'static str, &str)> {
+    lexer::tokenize(text)
+}
+
+/// Not part of the front door: every token type `lex` can give.
+pub fn token_type_names() -> Vec<&'static str> {
+    lexer::type_names()
+}
+
+/// One bit per code point: those the running Python's Unicode tables treat differently from the CPython 3.11
+/// tables the port was generated from (`python/sqlparse_rs/_unicode_drift.py`). Set once by the package.
+static DRIFT: std::sync::OnceLock<Vec<u64>> = std::sync::OnceLock::new();
+
+/// Not part of the front door: the package hands over its drift list once, at import. Later calls are ignored
+/// (one process runs one Python, so one Unicode version).
+pub fn set_drift(ranges: &[(u32, u32)]) {
+    let mut bits = vec![0u64; 0x11_0000usize.div_ceil(64)];
+    for &(a, b) in ranges {
+        for cp in a..=b.min(0x10_FFFF) {
+            bits[cp as usize / 64] |= 1 << (cp % 64);
+        }
+    }
+    let _ = DRIFT.set(bits);
+}
+
+/// Whether `text` holds a code point of the drift list (false before `set_drift`).
+pub fn drifted(text: &str) -> bool {
+    let Some(bits) = DRIFT.get() else {
+        return false;
+    };
+    !text.is_ascii()
+        && text.chars().any(|c| {
+            let cp = c as usize;
+            cp >= 0x80 && bits[cp / 64] >> (cp % 64) & 1 == 1
+        })
+}
+
 /// Port of `tokenize` (`front/sqlparse_front.py:13`).
 pub fn tokenize(sql: String) -> Result<Vec<serde_json::Value>, String> {
     Ok(lexer::tokenize(&sql)

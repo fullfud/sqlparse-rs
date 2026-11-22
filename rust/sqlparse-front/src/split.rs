@@ -22,6 +22,15 @@ pub(crate) fn is_a(ttype: &str, parent: &str) -> bool {
         && (ttype.len() == parent.len() || ttype.as_bytes()[parent.len()] == b'.')
 }
 
+/// `value.upper() == word` for an upper-case ASCII `word`, without allocating for ASCII values.
+fn upper_is(value: &str, word: &str) -> bool {
+    if value.is_ascii() {
+        value.eq_ignore_ascii_case(word)
+    } else {
+        pystr::upper(value) == word
+    }
+}
+
 /// `value.split()[0]` (None where Python raises IndexError: no word at all).
 pub(crate) fn first_word(value: &str) -> Option<&str> {
     value.split(pystr::isspace).find(|w| !w.is_empty())
@@ -127,7 +136,18 @@ impl Splitter {
         } else if !is_a(ttype, KEYWORD) {
             return 0;
         }
-        let unified = pystr::upper(value);
+        // `value.upper()`, on the stack for the usual short ASCII keyword
+        let mut buf = [0u8; 32];
+        let owned;
+        let unified: &str = if value.is_ascii() && value.len() <= buf.len() {
+            let up = &mut buf[..value.len()];
+            up.copy_from_slice(value.as_bytes());
+            up.make_ascii_uppercase();
+            std::str::from_utf8(up).unwrap_or_default()
+        } else {
+            owned = pystr::upper(value);
+            &owned
+        };
         if ttype == KEYWORD_DDL && unified.starts_with("CREATE") {
             self.is_create = true;
             return 0;
@@ -150,7 +170,7 @@ impl Splitter {
         if self.seen_begin
             && ttype == KEYWORD
             && matches!(
-                unified.as_str(),
+                unified,
                 "TRANSACTION"
                     | "WORK"
                     | "TRAN"
@@ -168,11 +188,11 @@ impl Splitter {
             return 0;
         }
         if self.block_stack.contains(&"BEGIN")
-            && let Some(res) = self.handle_nested_block(&unified)
+            && let Some(res) = self.handle_nested_block(unified)
         {
             return res;
         }
-        self.handle_closing_keyword(&unified)
+        self.handle_closing_keyword(unified)
     }
 }
 
@@ -198,7 +218,7 @@ pub(crate) fn statements(tokens: &[(&'static str, &str)]) -> Vec<std::ops::Range
         } else if !matches!(
             ttype,
             WHITESPACE | NEWLINE | COMMENT_SINGLE | COMMENT_MULTILINE
-        ) && !(ttype == KEYWORD && pystr::upper(value) == "BEGIN")
+        ) && !(ttype == KEYWORD && upper_is(value, "BEGIN"))
         {
             s.seen_begin = false;
         }
@@ -213,6 +233,9 @@ pub(crate) fn statements(tokens: &[(&'static str, &str)]) -> Vec<std::ops::Range
 /// `sqlparse.split(text, strip_semicolon=...)`.
 pub(crate) fn split(text: &str, strip_semicolon: bool) -> Vec<String> {
     let tokens = lexer::tokenize(text);
+    // every token is a slice of `text` and a statement is a run of consecutive tokens: its text is the slice
+    // from its first token's start to its last token's end
+    let offset = |v: &str| v.as_ptr() as usize - text.as_ptr() as usize;
     statements(&tokens)
         .into_iter()
         .map(|range| {
@@ -226,8 +249,12 @@ pub(crate) fn split(text: &str, strip_semicolon: bool) -> Vec<String> {
                     }
                 }
             }
-            let text: String = stmt.iter().map(|(_, v)| *v).collect();
-            pystr::strip(&text).to_string()
+            match (stmt.first(), stmt.last()) {
+                (Some((_, first)), Some((_, last))) => {
+                    pystr::strip(&text[offset(first)..offset(last) + last.len()]).to_string()
+                }
+                _ => String::new(),
+            }
         })
         .collect()
 }

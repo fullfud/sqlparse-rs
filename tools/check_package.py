@@ -1,7 +1,7 @@
 """The package against sqlparse, through the public calls: sqlparse.format/split against sqlparse_rs.format/split.
 
     python -X utf8 tools/check_package.py [--quick] [part ...]     parts: corpus fallbacks inert lexer installed
-                                                                  cli unicode (default: all)
+                                                                  cli unicode lexswap many (default: all)
 
 --quick takes every 8th corpus file and every 8th chunk of code points (CI runs it on every OS x Python and
 the whole check once).
@@ -12,6 +12,9 @@ the whole check once).
 3. A changed default lexer goes to sqlparse; put back with default_initialization(), calls go to Rust again.
 4. Every non-ASCII code point inside SQL text through the case options: the ones this Python's Unicode tables
    treat as CPython 3.11 does run in Rust (many to a call), the others (_unicode_drift.py) go to sqlparse.
+5. The Rust lexer install() gives sqlparse: lexer.tokenize and parse() (every node: class, token type object,
+   value) on the corpus, sqlparse's test files and random scripts, against sqlparse's own lexer.
+6. split_many against split, Rust and fallback texts mixed.
 
 Exits 1 on any mismatch, so CI fails on it.
 """
@@ -27,8 +30,9 @@ from sqlparse import keywords, tokens
 from sqlparse.lexer import Lexer
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-NATIVE = {sqlparse_rs._native.format: 'format', sqlparse_rs._native.split: 'split'}
-counts = {'format': 0, 'split': 0}
+NATIVE = {sqlparse_rs._native.format: 'format', sqlparse_rs._native.split: 'split',
+          sqlparse_rs._native.lex: 'lex', sqlparse_rs._native.split_many: 'split_many'}
+counts = {'format': 0, 'split': 0, 'lex': 0, 'split_many': 0}
 
 
 def hook(frame, event, arg):
@@ -291,7 +295,7 @@ def unicode_sweep():
     contexts = ['select {} from t', 'select a{}b, "{}"Σ, x{}Σ from {} where {} = 1']
     options = [{'keyword_case': 'upper', 'identifier_case': 'lower'}, {'keyword_case': 'capitalize'},
                {'identifier_case': 'capitalize', 'reindent': True}]
-    n = ran = 0
+    n = ran = lexed = 0
     t0 = time.perf_counter()
     for i in range(0, len(ported), 320 if QUICK else 40):
         chunk = ''.join(ported[i:i + 40])
@@ -304,8 +308,9 @@ def unicode_sweep():
                 ran += native_calls() - before
                 same(f'unicode {opts} U+{ord(chunk[0]):04X}..', plain(sqlparse.format, text, **opts), b)
                 n += 1
-    if ran != n:
-        print(f'UNICODE NOT ALL IN RUST: {ran} of {n}')
+            lexed += lexer_same(f'unicode lexer U+{ord(chunk[0]):04X}..', text)
+    if ran != n or lexed != n // len(options):
+        print(f'UNICODE NOT ALL IN RUST: format {ran} of {n}, lexer {lexed} of {n // len(options)}')
         bad += 1
     leaked = 0
     for cp in sorted(drifted)[::max(1, len(drifted) // 3000)]:
@@ -335,14 +340,103 @@ def installed():
         print('install() did not route calls to Rust', out)
         bad += 1
     sqlparse_rs.uninstall()
-    if sqlparse.format is sqlparse_rs.format or sqlparse.split is sqlparse_rs.split:
+    if (sqlparse.format is sqlparse_rs.format or sqlparse.split is sqlparse_rs.split
+            or Lexer.get_tokens is sqlparse_rs._get_tokens):
         print('uninstall() left the package in place')
         bad += 1
     print('install/uninstall: done')
 
 
+def tree(node):
+    """parse()'s tree as plain data: class, token type (the object itself), value, children."""
+    if node.is_group:
+        return (type(node).__name__, node.value, [tree(t) for t in node.tokens])
+    return (type(node).__name__, node.ttype, node.value)
+
+
+def lexer_same(what, text):
+    """tokenize and parse() of `text` with the Rust lexer installed against sqlparse's; 1 when the Rust lexed
+    it (once per call), else 0."""
+    global bad
+    from sqlparse import lexer
+    a = plain(lambda: [(tt, v) for tt, v in lexer.tokenize(text)])
+    ta = plain(lambda: [tree(s) for s in sqlparse.parse(text)])
+    sqlparse_rs.install()
+    rearm()
+    before = counts['lex']
+    b = outcome(lambda: [(tt, v) for tt, v in lexer.tokenize(text)])
+    tb = outcome(lambda: [tree(s) for s in sqlparse.parse(text)])
+    ran = counts['lex'] - before
+    sqlparse_rs.uninstall()
+    same(what, a, b)
+    same(what + ' parse', ta, tb)
+    if a == b and a[0] == 'ok' and any(x[0] is not y[0] for x, y in zip(a[1], b[1])):
+        print('OTHER TOKEN TYPE OBJECTS', what)
+        bad += 1
+    return 1 if ran == 2 else 0
+
+
+def lexer_swap():
+    import random
+    paths = sorted(glob.glob(os.path.join(ROOT, 'bench', 'corpus', '*.sql')))[::8 if QUICK else 1]
+    texts = [open(p, encoding='utf-8').read() for p in paths]
+    for p in sorted(glob.glob(os.path.join(ROOT, 'upstream', 'tests', 'files', '*'))):
+        try:
+            texts.append(open(p, encoding='utf-8').read())
+        except UnicodeDecodeError:
+            pass
+    src = open(os.path.join(ROOT, 'tools', 'check_tree.py'), encoding='utf-8').read()
+    start = src.index('pieces = [')
+    pieces = __import__('ast').literal_eval(src[start + len('pieces = '):src.index(']\n', start) + 1])
+    r = random.Random(11)
+    for _ in range(300 if QUICK else 3000):
+        texts.append(''.join(r.choice(pieces) + r.choice([' ', '', '\n']) for _ in range(r.randint(1, 40))))
+    texts += ['', ' ', 'select $$a$$ /* c */ --x\n$t$b$t$', "select 'unclosed", 'BEGIN ' * 120 + 'END ' * 120]
+    lexed = sum(lexer_same(f'lexer swap {t[:50]!r}', t) for t in texts)
+    # what the swap must leave to sqlparse's lexer
+    from sqlparse import lexer
+    sql = 'select a, b from t'
+    sqlparse_rs.install()
+    before = counts['lex']
+    other = Lexer()
+    other.default_initialization()
+    list(other.get_tokens(sql))
+    list(lexer.tokenize(sql.encode()))
+    list(lexer.tokenize(__import__('io').StringIO(sql)))
+    lx = Lexer.get_default_instance()
+    lx.add_keywords({'FOO': tokens.Keyword})
+    list(lexer.tokenize(sql))
+    lx.default_initialization()
+    leaked = counts['lex'] - before
+    sqlparse_rs.uninstall()
+    if leaked or lexed != len(texts):
+        print(f'LEXER SWAP: {lexed} of {len(texts)} texts lexed in Rust, {leaked} calls that should not have been')
+        bad_add()
+    print(f'lexer swap: {len(texts)} texts, tokens and parse trees compared, all lexed in Rust')
+
+
+def bad_add():
+    global bad
+    bad += 1
+
+
+def many():
+    paths = sorted(glob.glob(os.path.join(ROOT, 'bench', 'corpus', 'q*.sql')))[::8 if QUICK else 1]
+    texts = [open(p, encoding='utf-8').read() for p in paths]
+    mixed = texts + [b'select 1; select 2', Sub('a;b'), 'x\ud800; y', '', ';;', 'select \U00031350; x']
+    for strip in (False, True):
+        expect = [plain(sqlparse.split, t, strip_semicolon=strip) for t in mixed]
+        before = counts['split_many']
+        got = outcome(sqlparse_rs.split_many, mixed, strip_semicolon=strip)
+        same(f'split_many strip={strip}', ('ok', [e[1] for e in expect]), got)
+        if counts['split_many'] - before != 1:
+            print('split_many did not run in Rust')
+            bad_add()
+    print(f'split_many: {len(mixed)} texts x 2, same as split')
+
+
 PARTS = {'corpus': corpus, 'fallbacks': fallbacks, 'inert': inert_arguments, 'lexer': lexer_changes,
-         'installed': installed, 'cli': cli, 'unicode': unicode_sweep}
+         'installed': installed, 'cli': cli, 'unicode': unicode_sweep, 'lexswap': lexer_swap, 'many': many}
 args = sys.argv[1:]
 QUICK = '--quick' in args
 chosen = [a for a in args if a != '--quick'] or list(PARTS)

@@ -4,9 +4,13 @@
     sqlparse_rs.format(sql, reindent=True, keyword_case='upper')   # same signature and result as sqlparse.format
     sqlparse_rs.split(sql)
 
+    sqlparse_rs.split_many(sqls)   # split() of each, over all CPU threads
+
     sqlparse_rs.install()   # sqlparse.format and sqlparse.split now go through here, for every caller
                             # that looks them up on the module (sqlparse.format(...)); a name bound earlier
-                            # with `from sqlparse import format` keeps the original
+                            # with `from sqlparse import format` keeps the original. sqlparse's default
+                            # lexer gets the Rust tokenizer too, so sqlparse.parse() and everything else
+                            # that lexes runs it.
 
 The Rust is a port of sqlparse 0.6.1 checked call by call against it (see the project's README). A call goes to
 the original sqlparse, unchanged, unless all of this holds:
@@ -29,35 +33,46 @@ Errors are sqlparse's own: an invalid option value raises `sqlparse.exceptions.S
 message, and so does a statement nested past Python's recursion limit, at the same depth as in sqlparse.
 """
 
-import re as _re
 import unicodedata as _unicodedata
 
 import sqlparse
 from sqlparse import lexer as _lexer
+from sqlparse import tokens as _tokens
 
 from . import _native
 from ._unicode_drift import DRIFT as _DRIFT
 from ._unicode_drift import PORTED_UNICODE as _PORTED_UNICODE
 
-__all__ = ['format', 'split', 'install', 'uninstall', 'PORTED_VERSION']
+__all__ = ['format', 'split', 'split_many', 'install', 'uninstall', 'PORTED_VERSION']
 
 PORTED_VERSION = '0.6.1'
 
 _original_format = sqlparse.format
 _original_split = sqlparse.split
+_original_get_tokens = _lexer.Lexer.get_tokens
 _ported = sqlparse.__version__ == PORTED_VERSION
 
 
 
 def _drift_check():
-    """str -> bool: whether the Rust treats every character of the text as this Python does."""
+    """str -> bool: whether the Rust treats every character of the text as this Python does. The drift list goes
+    to the Rust once (a bit per code point); a text is then checked in one pass over it."""
     version = _unicodedata.unidata_version
     if version == _PORTED_UNICODE:
         return lambda text: True
-    if version not in _DRIFT:
-        return str.isascii
-    found = _re.compile('[' + ''.join(f'\\U{a:08x}-\\U{b:08x}' for a, b in _DRIFT[version]) + ']').search
-    return lambda text: text.isascii() or not found(text)
+    # a Unicode version the list does not know: no non-ASCII text runs in Rust
+    _native.set_drift(list(_DRIFT.get(version, ((0x80, 0x10FFFF),))))
+    drifted = _native.drifted
+
+    def ported(text):
+        if text.isascii():
+            return True
+        try:
+            return not drifted(text)
+        except UnicodeEncodeError:  # lone surrogates: sqlparse's
+            return False
+
+    return ported
 
 
 _text_ported = _drift_check()
@@ -187,17 +202,63 @@ def split(sql, encoding=None, strip_semicolon=False):
     return _original_split(sql, encoding, strip_semicolon)
 
 
+def split_many(sqls, encoding=None, strip_semicolon=False):
+    """[split(sql, encoding, strip_semicolon) for sql in sqls], the texts the Rust takes split over all CPU
+    threads at once (without Python's lock); the others go to sqlparse one by one."""
+    sqls = list(sqls)
+    out = [None] * len(sqls)
+    if _ported and type(strip_semicolon) is bool and _lexer_ported():
+        fast = [i for i, sql in enumerate(sqls) if type(sql) is str and _text_ported(sql)]
+        if fast:
+            try:
+                for i, statements in zip(fast, _native.split_many([sqls[i] for i in fast], strip_semicolon)):
+                    out[i] = statements
+            except UnicodeEncodeError:
+                pass
+    for i, statements in enumerate(out):
+        if statements is None:
+            out[i] = _original_split(sqls[i], encoding, strip_semicolon)
+    return out
+
+
+def _token_type(name):
+    t = _tokens.Token
+    for part in name.split('.')[1:]:
+        t = getattr(t, part)
+    return t
+
+
+_native.set_token_types({name: _token_type(name) for name in _native.token_type_names()})
+
+
+def _get_tokens(self, text, encoding=None):
+    """sqlparse's Lexer.get_tokens, with install(): sqlparse's default lexer, as sqlparse sets it up, on a `str`
+    the Rust takes, tokenizes in Rust; anything else (another Lexer, a changed one, bytes, a stream) goes to
+    sqlparse's own. Same (token type, value) pairs, same token type objects."""
+    if self is _lexer.Lexer._default_instance and type(text) is str and _text_ported(text) and _lexer_ported():
+        try:
+            tokens = _native.lex(text)
+        except UnicodeEncodeError:
+            tokens = None
+        if tokens is not None:
+            yield from tokens
+            return
+    yield from _original_get_tokens(self, text, encoding)
+
+
 def install():
-    """Make sqlparse.format and sqlparse.split these. Does nothing (returns False) when the installed sqlparse is
-    not the version that was ported."""
+    """Make sqlparse.format and sqlparse.split these, and give sqlparse's default lexer the Rust tokenizer. Does
+    nothing (returns False) when the installed sqlparse is not the version that was ported."""
     if not _ported:
         return False
     sqlparse.format = format
     sqlparse.split = split
+    _lexer.Lexer.get_tokens = _get_tokens
     return True
 
 
 def uninstall():
-    """Put sqlparse's own format and split back."""
+    """Put sqlparse's own format, split and lexer back."""
     sqlparse.format = _original_format
     sqlparse.split = _original_split
+    _lexer.Lexer.get_tokens = _original_get_tokens

@@ -4,6 +4,7 @@
 #[rustfmt::skip]
 mod lexer_tables;
 #[path = "../src/lexer.rs"]
+#[allow(dead_code)]
 mod lexer;
 #[path = "../src/pystr.rs"]
 #[allow(dead_code)]

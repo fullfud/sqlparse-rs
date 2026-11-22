@@ -19,8 +19,9 @@ class Counted:
 
     def pytest_configure(self, config):
         assert sqlparse_rs.install()
-        native = {sqlparse_rs._native.format: 'format', sqlparse_rs._native.split: 'split'}
-        counts = self.counts = {'format': 0, 'split': 0}
+        native = {sqlparse_rs._native.format: 'format', sqlparse_rs._native.split: 'split',
+                  sqlparse_rs._native.lex: 'lex'}
+        counts = self.counts = {'format': 0, 'split': 0, 'lex': 0}
 
         def hook(frame, event, arg):
             if event == 'c_call':
@@ -35,7 +36,7 @@ class Counted:
         import sqlparse
         installed = sqlparse.format is sqlparse_rs.format and sqlparse.split is sqlparse_rs.split
         print(f'\n[sqlparse_rs] installed: {installed}; calls run in Rust: format {self.counts["format"]}, '
-              f'split {self.counts["split"]}')
+              f'split {self.counts["split"]}, lexer (parse() and the rest) {self.counts["lex"]}')
 
 
 os.chdir(os.path.join(ROOT, 'upstream'))

@@ -5,7 +5,7 @@ import glob, importlib.util, json, os, random, sys, time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'front'))
 import sqlparse
-pyd = glob.glob(os.path.join(ROOT, 'rust', 'sqlparse-front', 'python', 'sqlparse_front', '_native*'))[0]
+pyd = os.environ.get('PYD') or glob.glob(os.path.join(ROOT, 'rust', 'sqlparse-front', 'python', 'sqlparse_front', '_native*'))[0]
 spec = importlib.util.spec_from_file_location('_native', pyd); rs = importlib.util.module_from_spec(spec); spec.loader.exec_module(rs)
 
 bad = 0
@@ -53,3 +53,4 @@ for cp in range(0x110000):
         check(ctx.format(c, c)); n += 1
 print(f'{n} code point texts done')
 print(f'mismatches {bad}, {time.perf_counter() - t0:.0f} s')
+sys.exit(1 if bad else 0)

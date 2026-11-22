@@ -84,11 +84,48 @@ fn split_inner(sql: String, strip_semicolon: bool) -> Result<Vec<String>, String
     Ok(out)
 }
 
-/// `split`.
+/// `split`. Other Python threads run meanwhile (split reads nothing from Python).
 #[pyfunction]
 #[pyo3(name = "split", signature = (sql, strip_semicolon=false))]
-fn split(sql: String, strip_semicolon: bool) -> PyResult<Vec<String>> {
-    split_inner(sql, strip_semicolon).map_err(error)
+fn split(py: Python<'_>, sql: String, strip_semicolon: bool) -> PyResult<Vec<String>> {
+    py.detach(|| split_inner(sql, strip_semicolon))
+        .map_err(error)
+}
+
+/// `split_many`: not in the front door; `split` of each text, the texts shared out over the CPU's threads
+/// with Python's lock released.
+#[pyfunction]
+#[pyo3(name = "split_many", signature = (sqls, strip_semicolon=false))]
+fn split_many(
+    py: Python<'_>,
+    sqls: Vec<String>,
+    strip_semicolon: bool,
+) -> PyResult<Vec<Vec<String>>> {
+    py.detach(|| {
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let chunk = sqls.len().div_ceil(threads).max(1);
+        std::thread::scope(|scope| {
+            let parts: Vec<_> = sqls
+                .chunks(chunk)
+                .map(|part| {
+                    scope.spawn(move || {
+                        part.iter()
+                            .map(|sql| port::split(sql.clone(), strip_semicolon))
+                            .collect::<Result<Vec<_>, String>>()
+                    })
+                })
+                .collect();
+            let mut out = Vec::with_capacity(sqls.len());
+            for part in parts {
+                out.extend(
+                    part.join()
+                        .map_err(|_| "split_many: a worker panicked".to_string())??,
+                );
+            }
+            Ok(out)
+        })
+    })
+    .map_err(error)
 }
 
 fn format_inner(
@@ -198,6 +235,70 @@ fn parse_tree(py: Python<'_>, sql: String) -> PyResult<Py<PyAny>> {
         .and_then(|v| crate::pyconv::ToPy::to_py(&v, py))
 }
 
+/// The token type objects of `sqlparse.tokens` by name, handed over once by the package for `lex`.
+static TOKEN_TYPES: std::sync::OnceLock<std::collections::HashMap<String, Py<PyAny>>> =
+    std::sync::OnceLock::new();
+
+/// `token_type_names`: every token type name `lex` can give.
+#[pyfunction]
+#[pyo3(name = "token_type_names")]
+fn token_type_names() -> Vec<&'static str> {
+    port::token_type_names()
+}
+
+/// `set_token_types`: the `sqlparse.tokens` objects for `token_type_names()`.
+#[pyfunction]
+#[pyo3(name = "set_token_types", signature = (types))]
+fn set_token_types(types: std::collections::HashMap<String, Py<PyAny>>) {
+    let _ = TOKEN_TYPES.set(types);
+}
+
+/// `lex`: `sqlparse.lexer.tokenize(text)` as a list of (token type object, text) tuples.
+#[pyfunction]
+#[pyo3(name = "lex", signature = (text))]
+fn lex<'py>(py: Python<'py>, text: String) -> PyResult<Bound<'py, pyo3::types::PyList>> {
+    use pyo3::types::{PyString, PyTuple};
+    let types = TOKEN_TYPES.get().ok_or_else(|| {
+        pyo3::exceptions::PyRuntimeError::new_err("lex: set_token_types was not called")
+    })?;
+    let tokens = port::lex(&text);
+    let mut items = Vec::with_capacity(tokens.len());
+    // the lexer's type names are a handful of static strings: find each by address first, by name once
+    let mut seen: Vec<(usize, &Py<PyAny>)> = Vec::with_capacity(16);
+    for (ttype, value) in tokens {
+        let addr = ttype.as_ptr() as usize;
+        let t = match seen.iter().find(|(a, _)| *a == addr) {
+            Some(&(_, t)) => t,
+            None => {
+                let t = types
+                    .get(ttype)
+                    .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(ttype))?;
+                seen.push((addr, t));
+                t
+            }
+        };
+        items.push(PyTuple::new(
+            py,
+            [t.bind(py).clone(), PyString::new(py, value).into_any()],
+        )?);
+    }
+    pyo3::types::PyList::new(py, items)
+}
+
+/// `set_drift`: not in the front door; the package's Unicode-version guard (see `port::set_drift`).
+#[pyfunction]
+#[pyo3(name = "set_drift", signature = (ranges))]
+fn set_drift(ranges: Vec<(u32, u32)>) {
+    port::set_drift(&ranges)
+}
+
+/// `drifted`: whether the text holds a code point of the drift list.
+#[pyfunction]
+#[pyo3(name = "drifted", signature = (text))]
+fn drifted(text: String) -> bool {
+    port::drifted(&text)
+}
+
 #[pymodule]
 #[pyo3(name = "_native")]
 fn native_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -205,5 +306,11 @@ fn native_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(split, m)?)?;
     m.add_function(wrap_pyfunction!(format, m)?)?;
     m.add_function(wrap_pyfunction!(parse_tree, m)?)?;
+    m.add_function(wrap_pyfunction!(set_drift, m)?)?;
+    m.add_function(wrap_pyfunction!(split_many, m)?)?;
+    m.add_function(wrap_pyfunction!(token_type_names, m)?)?;
+    m.add_function(wrap_pyfunction!(set_token_types, m)?)?;
+    m.add_function(wrap_pyfunction!(lex, m)?)?;
+    m.add_function(wrap_pyfunction!(drifted, m)?)?;
     Ok(())
 }
