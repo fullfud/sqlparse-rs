@@ -20,16 +20,24 @@ the original sqlparse, unchanged, unless all of this holds:
   64 bits (`indent_width` at most 4096, see _INDENT_WIDTH_MAX), `keyword_case`/`identifier_case`/`output_format`
   `str` or None, `truncate_char` `str`; other keywords are dropped, as sqlparse never reads them (`indent_char`,
   which it does read, it always overwrites from `indent_tabs`); split's `strip_semicolon` is a `bool`;
-- the text can be encoded as UTF-8 (a str with lone surrogates cannot).
+- the text can be encoded as UTF-8 (a str with lone surrogates cannot);
+- the text holds no code point this Python's Unicode version treats differently from the Unicode 14 the Rust
+  was generated from (CPython 3.11): see _unicode_drift.py. ASCII text always qualifies; on a Unicode version
+  not listed there, only ASCII text does.
 
 Errors are sqlparse's own: an invalid option value raises `sqlparse.exceptions.SQLParseError` with sqlparse's
 message, and so does a statement nested past Python's recursion limit, at the same depth as in sqlparse.
 """
 
+import re as _re
+import unicodedata as _unicodedata
+
 import sqlparse
 from sqlparse import lexer as _lexer
 
 from . import _native
+from ._unicode_drift import DRIFT as _DRIFT
+from ._unicode_drift import PORTED_UNICODE as _PORTED_UNICODE
 
 __all__ = ['format', 'split', 'install', 'uninstall', 'PORTED_VERSION']
 
@@ -38,6 +46,21 @@ PORTED_VERSION = '0.6.1'
 _original_format = sqlparse.format
 _original_split = sqlparse.split
 _ported = sqlparse.__version__ == PORTED_VERSION
+
+
+
+def _drift_check():
+    """str -> bool: whether the Rust treats every character of the text as this Python does."""
+    version = _unicodedata.unidata_version
+    if version == _PORTED_UNICODE:
+        return lambda text: True
+    if version not in _DRIFT:
+        return str.isascii
+    found = _re.compile('[' + ''.join(f'\\U{a:08x}-\\U{b:08x}' for a, b in _DRIFT[version]) + ']').search
+    return lambda text: text.isascii() or not found(text)
+
+
+_text_ported = _drift_check()
 
 _BOOL, _INT, _OPT_INT, _STR, _OPT_STR = range(5)
 _OPTIONS = {
@@ -139,7 +162,7 @@ def _lexer_ported():
 def format(sql, encoding=None, **options):
     """sqlparse.format(): *sql* formatted according to *options* (see sqlparse's documentation)."""
     ported = _ported_options(options) if _ported and type(sql) is str else None
-    if ported is not None and _lexer_ported():
+    if ported is not None and _text_ported(sql) and _lexer_ported():
         try:
             # Called from this frame: the Rust counts it in place of sqlparse.format's for the recursion limit.
             return _native.format(sql, **ported)
@@ -154,6 +177,7 @@ def split(sql, encoding=None, strip_semicolon=False):
         _ported
         and type(sql) is str
         and type(strip_semicolon) is bool
+        and _text_ported(sql)
         and _lexer_ported()
     ):
         try:

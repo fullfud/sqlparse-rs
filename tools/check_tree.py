@@ -121,7 +121,8 @@ def main():
     for t in edge:
         check(t, FORMATS[:6])
     print(f'{len(edge)} edge inputs done, mismatches {bad}, calls {calls}, {time.perf_counter() - t0:.0f} s')
+    return 1 if bad else 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

@@ -1,16 +1,25 @@
 """The package against sqlparse, through the public calls: sqlparse.format/split against sqlparse_rs.format/split.
 
-    python -X utf8 tools/check_package.py
+    python -X utf8 tools/check_package.py [--quick] [part ...]     parts: corpus fallbacks inert lexer installed
+                                                                  cli unicode (default: all)
+
+--quick takes every 8th corpus file and every 8th chunk of code points (CI runs it on every OS x Python and
+the whole check once).
 
 1. The benchmark corpus through the option sets people use, and split(): same result or same exception (class
    and message), with every call run in Rust.
 2. Calls outside what was ported: each must give sqlparse's own answer and must not reach the Rust.
 3. A changed default lexer goes to sqlparse; put back with default_initialization(), calls go to Rust again.
+4. Every non-ASCII code point inside SQL text through the case options: the ones this Python's Unicode tables
+   treat as CPython 3.11 does run in Rust (many to a call), the others (_unicode_drift.py) go to sqlparse.
+
+Exits 1 on any mismatch, so CI fails on it.
 """
 import glob
 import os
 import sys
 import time
+import unicodedata
 
 import sqlparse
 import sqlparse_rs
@@ -47,6 +56,15 @@ def outcome(f, *args, **kwargs):
         return ('err', f'{type(e).__module__}.{type(e).__qualname__}', str(e))
 
 
+def plain(f, *args, **kwargs):
+    """outcome() with the profile hook off: it counts C calls only, and slows sqlparse's Python several times."""
+    sys.setprofile(None)
+    try:
+        return outcome(f, *args, **kwargs)
+    finally:
+        sys.setprofile(hook)
+
+
 bad = 0
 
 
@@ -76,7 +94,10 @@ OPTION_SETS = [
 
 
 def corpus():
-    texts = [open(p, encoding='utf-8').read() for p in sorted(glob.glob(os.path.join(ROOT, 'bench', 'corpus', 'q*.sql')))]
+    paths = sorted(glob.glob(os.path.join(ROOT, 'bench', 'corpus', 'q*.sql')))
+    if not paths:
+        sys.exit('no corpus: run python bench/gen_corpus.py first')
+    texts = [open(p, encoding='utf-8').read() for p in paths[::8 if QUICK else 1]]
     texts += ['', ';', 'select 1; select 2;', "select 'unclosed", 'BEGIN ' * 990 + 'END ' * 990,
               'select a ' + 'between ' * 980]
     before = native_calls()
@@ -85,7 +106,7 @@ def corpus():
     for opts in OPTION_SETS:
         for t in texts:
             t0 = time.perf_counter()
-            a = outcome(sqlparse.format, t, **opts)
+            a = plain(sqlparse.format, t, **opts)
             t1 = time.perf_counter()
             rearm()
             b = outcome(sqlparse_rs.format, t, **opts)
@@ -97,7 +118,7 @@ def corpus():
             n += 1
     for t in texts:
         for strip in (False, True):
-            a = outcome(sqlparse.split, t, strip_semicolon=strip)
+            a = plain(sqlparse.split, t, strip_semicolon=strip)
             rearm()
             same(f'split {strip} {t[:60]!r}', a, outcome(sqlparse_rs.split, t, strip_semicolon=strip))
             uncounted += rearm()
@@ -250,6 +271,59 @@ def lexer_changes():
     print('lexer changes: done')
 
 
+def unicode_sweep():
+    """Each non-ASCII scalar value inside a few SQL contexts, under the options whose result depends on Unicode
+    tables (case, \\w for names and keywords, splitlines, sigma). Code points that should run in Rust go 40 to a
+    text; drifted ones one at a time, each of which must stay with sqlparse."""
+    global bad
+    from sqlparse_rs import _unicode_drift
+    version = unicodedata.unidata_version
+    if version == _unicode_drift.PORTED_UNICODE:
+        drift = ()
+    else:
+        drift = _unicode_drift.DRIFT.get(version)
+    if drift is None:  # a Unicode version the package does not know: only ASCII text may run in Rust
+        drift = ((0x80, 0x10FFFF),)
+    drifted = set()
+    for a, b in drift:
+        drifted.update(range(a, b + 1))
+    ported = [chr(cp) for cp in range(0x80, 0x110000) if not 0xD800 <= cp <= 0xDFFF and cp not in drifted]
+    contexts = ['select {} from t', 'select a{}b, "{}"Σ, x{}Σ from {} where {} = 1']
+    options = [{'keyword_case': 'upper', 'identifier_case': 'lower'}, {'keyword_case': 'capitalize'},
+               {'identifier_case': 'capitalize', 'reindent': True}]
+    n = ran = 0
+    t0 = time.perf_counter()
+    for i in range(0, len(ported), 320 if QUICK else 40):
+        chunk = ''.join(ported[i:i + 40])
+        for ctx in contexts:
+            text = ctx.replace('{}', chunk)
+            for opts in options:
+                rearm()
+                before = native_calls()
+                b = outcome(sqlparse_rs.format, text, **opts)
+                ran += native_calls() - before
+                same(f'unicode {opts} U+{ord(chunk[0]):04X}..', plain(sqlparse.format, text, **opts), b)
+                n += 1
+    if ran != n:
+        print(f'UNICODE NOT ALL IN RUST: {ran} of {n}')
+        bad += 1
+    leaked = 0
+    for cp in sorted(drifted)[::max(1, len(drifted) // 3000)]:
+        text = f'select a{chr(cp)}b from t'
+        before = native_calls()
+        b = outcome(sqlparse_rs.format, text, keyword_case='upper')
+        leaked += native_calls() - before
+        same(f'unicode drift U+{cp:04X}', outcome(sqlparse.format, text, keyword_case='upper'), b)
+        b = outcome(sqlparse_rs.split, text + ';x')
+        leaked += native_calls() - before
+        same(f'unicode drift split U+{cp:04X}', outcome(sqlparse.split, text + ';x'), b)
+    if leaked:
+        print(f'UNICODE DRIFT REACHED RUST {leaked} times')
+        bad += 1
+    print(f'unicode {version}: {len(ported)} code points in {n} calls in Rust, {len(drifted)} drifted ones '
+          f'left to sqlparse, {time.perf_counter() - t0:.0f} s')
+
+
 def installed():
     global bad
     rearm()
@@ -267,12 +341,16 @@ def installed():
     print('install/uninstall: done')
 
 
+PARTS = {'corpus': corpus, 'fallbacks': fallbacks, 'inert': inert_arguments, 'lexer': lexer_changes,
+         'installed': installed, 'cli': cli, 'unicode': unicode_sweep}
+args = sys.argv[1:]
+QUICK = '--quick' in args
+chosen = [a for a in args if a != '--quick'] or list(PARTS)
 sys.setprofile(hook)
-corpus()
-fallbacks()
-inert_arguments()
-lexer_changes()
-installed()
-cli()
+for part in chosen:
+    t0 = time.perf_counter()
+    PARTS[part]()
+    print(f'  [{part} {time.perf_counter() - t0:.0f} s]', flush=True)
 sys.setprofile(None)
 print('mismatches', bad)
+sys.exit(1 if bad else 0)

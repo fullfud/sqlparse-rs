@@ -46,6 +46,7 @@ The whole benchmark corpus (440 files, 2.1 MB of SQL: generated queries and scri
 | Lexer (`tools/check_tokenize.py`): recorded texts, cuts of them, random texts | **32,986 texts, 0 differ** |
 | Case filters over every Unicode code point (`tools/check_format_flat.py`) | **26.7 million texts, 0 differ** |
 | Package against sqlparse (`tools/check_package.py`): corpus x 13 option sets, split, CLI, bad option types, lexer changes | **6,090 calls in Rust, 0 differ**; 18 out-of-range calls all answered by sqlparse |
+| Package over every non-ASCII code point (`check_package.py unicode`), on each CPython 3.10-3.14 | the code points that behave as in 3.11 run in Rust, 0 differ; the drifted ones (see Unicode versions) go to sqlparse |
 | Fresh random cases (`rust-anything fuzz --time 600`) | **282,550 / 282,556**; the 6 pass `None` where the front door types `str`/`bool` (a known difference of the test bindings, see below) |
 | Python's recursion limit (`tools/check_recursion.py`): 11 deep-nesting shapes, 3 caller depths, through C calls | **fails at exactly the same size** on CPython 3.10, 3.11, 3.12, 3.13, 3.14 |
 | Platforms | Windows x64 (CPython 3.10-3.14), Linux x64 (manylinux2014 wheel, CPython 3.12 under WSL Ubuntu 24.04) |
@@ -90,9 +91,20 @@ unchanged, so the answer is always sqlparse's:
 | sqlparse's default lexer as sqlparse sets it up | after `Lexer.add_keywords`, `set_SQL_REGEX`, `clear` (Rust again after `default_initialization()`) |
 | options of exactly the type the port takes: `True`/`False`, `int`, `str`, `None` where allowed | `reindent=1`, `reindent=None`, `indent_width=4.0`, a `str` subclass, an `int` past 64 bits |
 | `indent_width` up to 4096 | a larger `indent_width` (see Limits) |
+| text whose characters this Python's Unicode tables treat as CPython 3.11's do (all ASCII text, nearly all other) | text holding a code point that changed since Unicode 14 on this Python (see below) |
 | keywords sqlparse never reads (`filename`, `outfile`, ... as the CLI passes them) are dropped, as sqlparse ignores them | |
 
 The rules are in [`python/sqlparse_rs/__init__.py`](python/sqlparse_rs/__init__.py).
+
+**Unicode versions.** The Rust's character tables (`\w`, `\d`, case mapping, `isprintable`, line breaks, final
+sigma) are taken from CPython 3.11, which has Unicode 14. Other CPythons ship other Unicode versions: 3.10 has
+13.0, 3.12 has 15.0, 3.13 has 15.1, 3.14 has 16.0, and on each some code points behave differently (newly
+assigned CJK letters become `\w` and case-insensitive keyword matching changes around them, for example). sqlparse
+follows the Python it runs on, so a text holding such a code point goes to sqlparse.
+[`tools/unicode_drift.py`](tools/unicode_drift.py) compares every code point's behaviour on each CPython with
+3.11's and writes the list ([`_unicode_drift.py`](python/sqlparse_rs/_unicode_drift.py): 839 code points for
+Unicode 13, 4,489 / 5,116 / 10,304 for 15.0 / 15.1 / 16.0). On a Unicode version not in the list, only ASCII text
+runs in Rust.
 
 `sqlparse.parse()` is not replaced: it returns sqlparse's Python token tree, which callers walk and change, so
 it has to stay Python objects. The Rust builds the same tree (checked node by node above) but uses it only

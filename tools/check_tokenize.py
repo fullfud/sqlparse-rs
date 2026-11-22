@@ -1,19 +1,24 @@
 """Compares tokenize() of the original and of the Rust module: every recorded tokenize case, the corpus, and
-every case's SQL cut at random points (unclosed strings, comments and dollar quotes). Prints mismatches."""
+every case's SQL cut at random points (unclosed strings, comments and dollar quotes). Prints mismatches and exits 1
+on any. PYD=path loads another build of the native module (e.g. the installed package's sqlparse_rs._native);
+the texts are rust-anything's recorded cases (rust/sqlparse-front/cases.jsonl, not committed: skipped when
+missing) and the corpus (bench/gen_corpus.py)."""
 import json, os, random, sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 import glob, importlib.util
 sys.path.insert(0, os.path.join(ROOT, 'front'))
 import sqlparse_front as py
-_pyd = glob.glob(os.path.join(ROOT, 'rust', 'sqlparse-front', 'python', 'sqlparse_front', '_native*'))[0]
+_pyd = os.environ.get('PYD') or glob.glob(os.path.join(ROOT, 'rust', 'sqlparse-front', 'python', 'sqlparse_front', '_native*'))[0]
 _spec = importlib.util.spec_from_file_location('_native', _pyd)
 rs = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(rs)
 
 texts = []
-for line in open(os.path.join(ROOT, 'rust', 'sqlparse-front', 'cases.jsonl'), encoding='utf-8'):
+_cases = os.path.join(ROOT, 'rust', 'sqlparse-front', 'cases.jsonl')
+for line in open(_cases, encoding='utf-8') if os.path.exists(_cases) else ():
     d = json.loads(line)
     if d['fn'] in ('tokenize', 'split', 'format') and isinstance(d['args'][0], str):
         texts.append(d['args'][0])
+texts += [open(p, encoding='utf-8').read() for p in sorted(glob.glob(os.path.join(ROOT, 'bench', 'corpus', '*.sql')))]
 texts = list(dict.fromkeys(texts))
 r = random.Random(1)
 cuts = []
@@ -30,7 +35,7 @@ for t in texts + cuts:
         if bad <= 5:
             i = next(i for i in range(min(len(a), len(b))) if a[i] != b[i]) if any(x != y for x, y in zip(a, b)) else min(len(a), len(b))
             print('MISMATCH at token', i, 'py', a[i:i+3], 'rs', b[i:i+3], 'text', repr(t[:120]))
-print(f'{len(texts) + len(cuts)} texts ({len(texts)} recorded, {len(cuts)} cut), mismatches {bad}')
+print(f'{len(texts) + len(cuts)} texts ({len(texts)} recorded or corpus, {len(cuts)} cut), mismatches {bad}')
 
 # random text from pieces where Python and Rust regex semantics part: marks, numerics, case folding, delimiters
 PIECES = ['select', 'SELECT', 'from', 'end if', 'END\tLOOP', 'left  outer join', 'not null', 'nulls first', 'x.y',
@@ -52,3 +57,4 @@ for _ in range(N):
         if fuzz_bad <= 8:
             print('FUZZ MISMATCH', repr(t), '\n   py', a, '\n   rs', b)
 print(f'fuzz: {N} random texts, mismatches {fuzz_bad}')
+sys.exit(1 if bad or fuzz_bad else 0)
