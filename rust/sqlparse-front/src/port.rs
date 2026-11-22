@@ -123,7 +123,7 @@ pub fn format(
             right_margin,
             output_format,
         },
-        &python_stack(),
+        &python_stack(FORMAT_ENTRY_FRAMES_311),
     )
 }
 
@@ -131,11 +131,20 @@ pub fn format(
 /// stands, so a call from it has one frame on the stack that sqlparse counts in the entry point.
 const PACKAGE: &str = "sqlparse_rs";
 
+/// Frames on sqlparse's way in that CPython up to 3.11 counts against the recursion limit and 3.12 and later
+/// do not (3.12 stopped counting C calls such as `''.join(...)` and `tuple(...)`, and inlines comprehensions):
+/// `format` has two, `parse` one. The exact probe, run from the Rust, sees one of them as well on 3.12 (the call
+/// into the bindings no longer counts either), so the shift is one less. Measured with tools/check_recursion.py
+/// on CPython 3.10-3.14.
+const FORMAT_ENTRY_FRAMES_311: usize = 2;
+const PARSE_ENTRY_FRAMES_311: usize = 1;
+
 /// Where Python's recursion limit stands for this call: the frames on the stack, and
 /// `sys.getrecursionlimit()`. Called from `front/sqlparse_front.py`'s place, the front door's frame is
 /// added (the original has it, the bindings do not). Called from the package, whose frame replaces
 /// `sqlparse.format`'s (already counted in the entry point), there is neither, so two frames come off.
-fn python_stack() -> grouping::Stack {
+/// `entry_frames_311` is FORMAT_ENTRY_FRAMES_311 or PARSE_ENTRY_FRAMES_311, for the entry point being run.
+fn python_stack(entry_frames_311: usize) -> grouping::Stack {
     use pyo3::prelude::*;
     pyo3::Python::attach(|py| -> Option<grouping::Stack> {
         let sys = py.import("sys").ok()?;
@@ -147,11 +156,21 @@ fn python_stack() -> grouping::Stack {
             .get_item("__name__")
             .ok()
             .and_then(|n| n.extract().ok());
-        let shift = if caller.as_deref() == Some(PACKAGE) {
+        let mut shift = if caller.as_deref() == Some(PACKAGE) {
             2
         } else {
             0
         };
+        let minor: usize = sys
+            .getattr("version_info")
+            .ok()?
+            .getattr("minor")
+            .ok()?
+            .extract()
+            .ok()?;
+        if minor >= 12 {
+            shift += entry_frames_311 - 1;
+        }
         let mut depth = 1;
         loop {
             let back = frame.getattr("f_back").ok()?;
@@ -216,7 +235,7 @@ fn tree_value(t: &tree::Tree, id: tree::Id, parent: Option<tree::Id>) -> serde_j
 
 /// Port of `parse_tree` (`front/sqlparse_front.py`).
 pub fn parse_tree(sql: String) -> Result<Vec<serde_json::Value>, String> {
-    let trees = format::parse(&sql, &python_stack())?;
+    let trees = format::parse(&sql, &python_stack(PARSE_ENTRY_FRAMES_311))?;
     Ok(trees
         .iter()
         .map(|t| tree_value(t, tree::ROOT, None))
