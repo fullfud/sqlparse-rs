@@ -563,6 +563,14 @@ impl<'s> Reindent<'s> {
                     continue;
                 }
                 let value = t.value(prev);
+                // Most tokens: ASCII with none of the characters str.splitlines() breaks at, so one line as
+                // long as its bytes.
+                if value.bytes().all(|b| {
+                    b.is_ascii() && !matches!(b, b'\n' | b'\r' | 0x0b | 0x0c | 0x1c..=0x1e)
+                }) {
+                    length += value.len() as i128;
+                    continue;
+                }
                 let size = pystr::len(value) as i128;
                 if size == 0 {
                     continue;

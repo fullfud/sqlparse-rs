@@ -13,6 +13,8 @@ const COMMENT_TAG: &str = "/*";
 
 struct Compiled {
     re: fancy_regex::Regex,
+    /// Run first, on the regex crate's engine: no match there means no match of `re` (see gen_lexer.py).
+    prefilter: Option<regex::Regex>,
     before: &'static Before,
     first: &'static [(u32, u32)],
     action: &'static Action,
@@ -53,6 +55,10 @@ fn rules() -> &'static Rules {
             .map(|r| Compiled {
                 re: fancy_regex::Regex::new(&format!("^(?:{})", r.pattern))
                     .unwrap_or_else(|e| panic!("lexer rule {:?}: {e}", r.pattern)),
+                prefilter: r.prefilter.map(|p| {
+                    regex::Regex::new(&format!("^(?:{p})"))
+                        .unwrap_or_else(|e| panic!("lexer prefilter {p:?}: {e}"))
+                }),
                 before: &r.before,
                 first: r.first,
                 action: &r.action,
@@ -94,11 +100,19 @@ pub(crate) fn in_ranges(ranges: &[(u32, u32)], c: char) -> bool {
 
 /// `Lexer.is_keyword`: the keyword's token type, or `Token.Name`.
 fn keyword_type(value: &str) -> &'static str {
-    let up = super::pystr::upper(value);
-    match KEYWORDS.binary_search_by(|(k, _)| k.as_bytes().cmp(up.as_bytes())) {
+    let find = |up: &[u8]| match KEYWORDS.binary_search_by(|(k, _)| k.as_bytes().cmp(up)) {
         Ok(i) => KEYWORDS[i].1,
         Err(_) => "Token.Name",
+    };
+    // Nearly every word is short ASCII: upper-case it on the stack instead of in a new String.
+    let mut buf = [0u8; 32];
+    if value.len() <= buf.len() && value.is_ascii() {
+        let up = &mut buf[..value.len()];
+        up.copy_from_slice(value.as_bytes());
+        up.make_ascii_uppercase();
+        return find(up);
     }
+    find(super::pystr::upper(value).as_bytes())
 }
 
 /// `keywords.DelimitedSpans`: openers by start, closers by tag.
@@ -191,6 +205,9 @@ pub(crate) fn tokenize(text: &str) -> Vec<(&'static str, &str)> {
                 Before::NotIn(r) => prev.is_none_or(|c| !in_ranges(r, c)),
             };
             if !allowed {
+                continue;
+            }
+            if rule.prefilter.as_ref().is_some_and(|p| !p.is_match(rest)) {
                 continue;
             }
             let Ok(Some(m)) = rule.re.find(rest) else {

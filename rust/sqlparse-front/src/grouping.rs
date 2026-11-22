@@ -570,9 +570,12 @@ fn create_table_without_as(t: &Tree, l: Id) -> bool {
     let (mut create, mut table, mut as_) = (false, false, false);
     for &id in t.tokens(l) {
         let v = t.value(id);
-        // `value.upper() == 'CREATE'`: only a value of the same length (or one that grows when upper-cased,
-        // which needs a non-ASCII character) can match
-        if v.len() > 6 && v.is_ascii() {
+        // `value.upper() == 'CREATE'`: for ASCII a case-blind compare, with no new string; other text needs
+        // Python's upper() (U+017F upper-cases to S)
+        if v.is_ascii() {
+            create |= v.eq_ignore_ascii_case("CREATE");
+            table |= v.eq_ignore_ascii_case("TABLE");
+            as_ |= v.eq_ignore_ascii_case("AS");
             continue;
         }
         let up = pystr::upper(v);
