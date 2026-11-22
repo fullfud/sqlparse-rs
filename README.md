@@ -49,7 +49,7 @@ The whole benchmark corpus (440 files, 2.1 MB of SQL: generated queries and scri
 | Package over every non-ASCII code point (`check_package.py unicode`), on each CPython 3.10-3.14 | the code points that behave as in 3.11 run in Rust, 0 differ; the drifted ones (see Unicode versions) go to sqlparse |
 | Fresh random cases (`rust-anything fuzz --time 600`) | **282,550 / 282,556**; the 6 pass `None` where the front door types `str`/`bool` (a known difference of the test bindings, see below) |
 | Python's recursion limit (`tools/check_recursion.py`): 11 deep-nesting shapes, 3 caller depths, through C calls | **fails at exactly the same size** on CPython 3.10, 3.11, 3.12, 3.13, 3.14 |
-| Platforms | Windows x64 (CPython 3.10-3.14), Linux x64 (manylinux2014 wheel, CPython 3.12 under WSL Ubuntu 24.04) |
+| Platforms, in CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) from the built wheel | Linux x86_64 and aarch64 (manylinux2014), Windows x64, macOS arm64 and Intel (universal2) x **CPython 3.10, 3.11, 3.12, 3.13, 3.14**: all 25 combinations pass sqlparse's suite, the recursion check and the package check (the whole check, front door included, on Linux x86_64) |
 
 ## Install
 
@@ -208,7 +208,7 @@ whole statement for every line) are walked backwards to the last line break in t
 - **Exception class** needs rust-anything with dotted exception kinds
   ([erkamyaman/rust-anything#207](https://github.com/erkamyaman/rust-anything/pull/207), not merged yet) to
   regenerate the bindings; the bindings in this repository already raise sqlparse's own `SQLParseError`.
-- **Not tested:** macOS, ARM, PyPy, free-threaded CPython.
+- **Not tested:** Windows on ARM, musl (Alpine), PyPy, free-threaded CPython; no wheels are built for them.
 
 ## Layout
 
