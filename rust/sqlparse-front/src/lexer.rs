@@ -94,7 +94,7 @@ pub(crate) fn in_ranges(ranges: &[(u32, u32)], c: char) -> bool {
 
 /// `Lexer.is_keyword`: the keyword's token type, or `Token.Name`.
 fn keyword_type(value: &str) -> &'static str {
-    let up = value.to_uppercase();
+    let up = super::pystr::upper(value);
     match KEYWORDS.binary_search_by(|(k, _)| k.as_bytes().cmp(up.as_bytes())) {
         Ok(i) => KEYWORDS[i].1,
         Err(_) => "Token.Name",

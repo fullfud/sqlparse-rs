@@ -1,6 +1,13 @@
 //! Pure-Rust lexer timing on the corpus, no Python: cargo run --release --example bench_lexer
 #[path = "../src/lexer.rs"]
 mod lexer;
+#[path = "../src/pystr.rs"]
+#[allow(dead_code)]
+mod pystr;
+#[path = "../src/pyunicode_tables.rs"]
+#[allow(dead_code)]
+#[rustfmt::skip]
+mod pyunicode_tables;
 #[path = "../src/lexer_tables.rs"]
 #[allow(dead_code)]
 mod lexer_tables;

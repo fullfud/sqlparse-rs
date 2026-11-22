@@ -12,6 +12,15 @@ mod lexer;
 #[path = "lexer_tables.rs"]
 #[rustfmt::skip]
 mod lexer_tables;
+#[path = "format.rs"]
+mod format;
+#[path = "pystr.rs"]
+mod pystr;
+#[path = "split.rs"]
+mod split;
+#[path = "pyunicode_tables.rs"]
+#[rustfmt::skip]
+mod pyunicode_tables;
 
 /// Port of `tokenize` (`front/sqlparse_front.py:13`).
 pub fn tokenize(sql: String) -> Result<Vec<serde_json::Value>, String> {
@@ -25,8 +34,7 @@ pub fn tokenize(sql: String) -> Result<Vec<serde_json::Value>, String> {
 ///
 /// `strip_semicolon` defaults to `False` in the source.
 pub fn split(sql: String, strip_semicolon: bool) -> Result<Vec<String>, String> {
-    let _ = (&sql, &strip_semicolon);
-    unimplemented!("port `split` from front/sqlparse_front.py")
+    Ok(split::split(&sql, strip_semicolon))
 }
 
 /// Port of `format` (`front/sqlparse_front.py:23`).
@@ -87,26 +95,27 @@ pub fn format(
     right_margin: Option<i64>,
     output_format: Option<String>,
 ) -> Result<String, String> {
-    let _ = (
+    format::format(
         &sql,
-        &keyword_case,
-        &identifier_case,
-        &strip_comments,
-        &use_space_around_operators,
-        &strip_whitespace,
-        &truncate_strings,
-        &truncate_char,
-        &reindent,
-        &reindent_aligned,
-        &indent_columns,
-        &indent_after_first,
-        &indent_tabs,
-        &indent_width,
-        &wrap_after,
-        &comma_first,
-        &compact,
-        &right_margin,
-        &output_format,
-    );
-    unimplemented!("port `format` from front/sqlparse_front.py")
+        &format::Options {
+            keyword_case,
+            identifier_case,
+            strip_comments,
+            use_space_around_operators,
+            strip_whitespace,
+            truncate_strings,
+            truncate_char,
+            reindent,
+            reindent_aligned,
+            indent_columns,
+            indent_after_first,
+            indent_tabs,
+            indent_width,
+            wrap_after,
+            comma_first,
+            compact,
+            right_margin,
+            output_format,
+        },
+    )
 }

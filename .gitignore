@@ -8,3 +8,4 @@ rust/*/test-inputs.jsonl
 rust/*/diff.txt
 rust/*/diff.json
 rust/*/diff.err
+rust/*/python/*/_native.tmp-*
