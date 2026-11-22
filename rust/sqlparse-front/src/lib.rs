@@ -153,11 +153,26 @@ fn format(
     .map_err(error)
 }
 
+fn parse_tree_inner(sql: String) -> Result<Vec<serde_json::Value>, String> {
+    let out = port::parse_tree(sql)?;
+    Ok(out)
+}
+
+/// `parse_tree`.
+#[pyfunction]
+#[pyo3(name = "parse_tree", signature = (sql))]
+fn parse_tree(py: Python<'_>, sql: String) -> PyResult<Py<PyAny>> {
+    parse_tree_inner(sql)
+        .map_err(error)
+        .and_then(|v| crate::pyconv::ToPy::to_py(&v, py))
+}
+
 #[pymodule]
 #[pyo3(name = "_native")]
 fn native_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tokenize, m)?)?;
     m.add_function(wrap_pyfunction!(split, m)?)?;
     m.add_function(wrap_pyfunction!(format, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_tree, m)?)?;
     Ok(())
 }

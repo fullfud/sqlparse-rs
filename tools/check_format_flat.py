@@ -19,8 +19,9 @@ def run(f, text, opts):
 def check(text, **opts):
     global bad
     a, b = run(py.format, text, opts), run(rs.format, text, opts)
-    if a[0] == 'err' and b[0] == 'err':
-        a, b = ('err', a[1].split(': ', 1)[-1]), ('err', b[1].split(': ', 1)[-1])
+    if a[0] == 'err' and b[0] == 'err' and b[1].startswith('SQLParseError: '):
+        # the bridge has no SQLParseError class: it raises ValueError('SQLParseError: ...')
+        b = ('err', b[1].split(': ', 1)[1])
     if a != b:
         bad += 1
         if bad <= 8:

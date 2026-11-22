@@ -3,8 +3,8 @@
     python bench/make_inputs.py
 
 Inputs: every corpus file (bench/corpus, run gen_corpus.py first) and every SQL file of sqlparse's own test
-suite. Each goes through tokenize, split (both ways) and format with the option sets people use; the large
-scripts get only the two common format calls, to keep the recording a sensible size.
+suite. Each goes through tokenize, split (both ways) and format with the option sets people use, and parse_tree;
+the large scripts get only the common format calls and no tree, to keep the recording a sensible size.
 """
 
 import json
@@ -67,6 +67,8 @@ def main():
             case('split', sql, strip_semicolon=True)
             for opts in (COMMON if big else FORMATS):
                 case('format', sql, **opts)
+            if not big:
+                case('parse_tree', sql)
     print(f'{n} cases to {out}')
 
 

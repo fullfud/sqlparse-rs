@@ -1,10 +1,11 @@
 //! Port of `sqlparse.format` (sqlparse 0.6.1): `formatter.validate_options`, `build_filter_stack`, the token
-//! filters (`filters/tokens.py`), the output filters (`filters/output.py`) and `SerializerUnicode`.
-//!
-//! Options that need the grouped statement tree (strip_comments, strip_whitespace, reindent, reindent_aligned,
-//! use_space_around_operators, right_margin) are not ported yet and return an error saying so.
+//! filters (`filters/tokens.py`), the statement filters (`filters.rs`), the output filters
+//! (`filters/output.py`) and `SerializerUnicode`.
 
+use super::filters::{self, Aligned, Reindent, ReindentOptions};
+use super::grouping::{self, Stack};
 use super::split::{is_a, statements};
+use super::tree::{ROOT, Tree};
 use super::{lexer, pystr};
 
 pub(crate) struct Options {
@@ -18,15 +19,11 @@ pub(crate) struct Options {
     pub reindent: bool,
     pub reindent_aligned: bool,
     pub indent_columns: bool,
-    #[allow(dead_code)] // read by the reindent filter, not ported yet
     pub indent_after_first: bool,
-    #[allow(dead_code)] // read by the reindent filter, not ported yet
     pub indent_tabs: bool,
     pub indent_width: i64,
     pub wrap_after: i64,
-    #[allow(dead_code)] // read by the reindent filter, not ported yet
     pub comma_first: bool,
-    #[allow(dead_code)] // read by the reindent filter, not ported yet
     pub compact: bool,
     pub right_margin: Option<i64>,
     pub output_format: Option<String>,
@@ -75,6 +72,8 @@ struct Plan {
     keyword_case: Option<Case>,
     identifier_case: Option<Case>,
     truncate: Option<(usize, String)>,
+    reindent: bool,
+    strip_whitespace: bool,
     grouping: bool,
     output: Option<Output>,
 }
@@ -134,6 +133,8 @@ fn validate(o: &Options) -> Result<Plan, String> {
         keyword_case,
         identifier_case,
         truncate,
+        reindent,
+        strip_whitespace,
         grouping,
         output,
     })
@@ -232,94 +233,87 @@ fn string_content_end(text: &str, start: usize, q: u8) -> usize {
 
 const WHITESPACE: &str = "Token.Text.Whitespace";
 
-/// `OutputPythonFilter` / `OutputPHPFilter._process` on one statement's top-level tokens.
-fn output_filter(
+/// `OutputPythonFilter` / `OutputPHPFilter.process` on one statement: `text` is `str(stmt)`, `tokens` its
+/// top-level tokens as (is_whitespace, value), a group with the value it was made with. Returns the text of
+/// the statement the filter makes.
+fn output_filter<'a>(
     kind: Output,
-    tokens: Vec<(&'static str, String)>,
+    text: &str,
+    tokens: impl Iterator<Item = (bool, &'a str)>,
     count: usize,
-) -> Vec<(&'static str, String)> {
+) -> String {
     let base = if kind == Output::Php { "$sql" } else { "sql" };
     let varname = if count > 1 {
         format!("{base}{count}")
     } else {
         base.to_string()
     };
-    let text: String = tokens.iter().map(|(_, v)| v.as_str()).collect();
-    let has_nl = pystr::splitlines_count(pystr::strip(&text)) > 1;
-    let mut out: Vec<(&'static str, String)> = Vec::new();
-    let mut put = |t: &'static str, v: &str| out.push((t, v.to_string()));
+    let has_nl = pystr::splitlines_count(pystr::strip(text)) > 1;
+    let mut out = String::with_capacity(text.len() + 16);
     if count > 1 {
-        put(WHITESPACE, "\n");
+        out.push('\n');
     }
-    put("Token.Name", &varname);
-    put(WHITESPACE, " ");
+    out.push_str(&varname);
+    out.push(' ');
     if kind == Output::Php && has_nl {
-        put(WHITESPACE, " ");
+        out.push(' ');
     }
-    put("Token.Operator", "=");
-    put(WHITESPACE, " ");
+    out.push_str("= ");
     if kind == Output::Python && has_nl {
-        put("Token.Operator", "(");
+        out.push('(');
     }
-    put("Token.Text", if kind == Output::Php { "\"" } else { "'" });
-    for (ttype, value) in tokens {
-        if is_a(ttype, WHITESPACE) && value.contains('\n') {
+    out.push(if kind == Output::Php { '"' } else { '\'' });
+    for (is_ws, value) in tokens {
+        if is_ws && value.contains('\n') {
             match kind {
                 Output::Python => {
-                    put("Token.Text", " '");
-                    put(WHITESPACE, "\n");
-                    put(WHITESPACE, &" ".repeat(varname.chars().count() + 4));
-                    put("Token.Text", "'");
+                    out.push_str(" '\n");
+                    out.push_str(&" ".repeat(pystr::len(&varname) + 4));
+                    out.push('\'');
                 }
                 Output::Php => {
-                    put("Token.Text", " \";");
-                    put(WHITESPACE, "\n");
-                    put("Token.Name", &varname);
-                    put(WHITESPACE, " ");
-                    put("Token.Operator", ".=");
-                    put(WHITESPACE, " ");
-                    put("Token.Text", "\"");
+                    out.push_str(" \";\n");
+                    out.push_str(&varname);
+                    out.push_str(" .= \"");
                 }
             }
-            let after_lb = value.split_once('\n').map_or("", |(_, rest)| rest);
-            if !after_lb.is_empty() {
-                put(WHITESPACE, after_lb);
-            }
+            out.push_str(value.split_once('\n').map_or("", |(_, rest)| rest));
             continue;
         }
-        let escaped = match kind {
-            Output::Python => value.replace('\\', "\\\\").replace('\'', "\\'"),
-            Output::Php => value
-                .replace('\\', "\\\\")
-                .replace('"', "\\\"")
-                .replace('$', "\\$"),
-        };
-        put("Token.Text", &escaped);
+        match kind {
+            Output::Python => out.push_str(&value.replace('\\', "\\\\").replace('\'', "\\'")),
+            Output::Php => out.push_str(
+                &value
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\"")
+                    .replace('$', "\\$"),
+            ),
+        }
     }
     match kind {
         Output::Python => {
-            put("Token.Text", "'");
+            out.push('\'');
             if has_nl {
-                put("Token.Operator", ")");
+                out.push(')');
             }
         }
-        Output::Php => {
-            put("Token.Text", "\"");
-            put("Token.Punctuation", ";");
-        }
+        Output::Php => out.push_str("\";"),
     }
     out
 }
 
-/// `sqlparse.format(text, **options)`.
-pub(crate) fn format(text: &str, o: &Options) -> Result<String, String> {
+/// `SerializerUnicode.process`.
+fn serialize(text: &str, out: &mut String) {
+    let lines: Vec<&str> = split_unquoted_newlines(text)
+        .into_iter()
+        .map(pystr::rstrip)
+        .collect();
+    out.push_str(&lines.join("\n"));
+}
+
+/// `sqlparse.format(text, **options)`. `stack` says where Python's recursion limit stands for the call.
+pub(crate) fn format(text: &str, o: &Options, stack: &Stack) -> Result<String, String> {
     let plan = validate(o)?;
-    if plan.grouping {
-        return Err(
-            "NotImplementedError: format options that group the statement are not ported yet"
-                .into(),
-        );
-    }
     let mut tokens: Vec<(&'static str, String)> = lexer::tokenize(text)
         .into_iter()
         .map(|(t, v)| (t, v.to_string()))
@@ -347,19 +341,93 @@ pub(crate) fn format(text: &str, o: &Options) -> Result<String, String> {
             }
         }
     }
+    let mut reindent = plan.reindent.then(|| {
+        Reindent::new(
+            &ReindentOptions {
+                tabs: o.indent_tabs,
+                width: o.indent_width,
+                indent_after_first: o.indent_after_first,
+                indent_columns: o.indent_columns,
+                wrap_after: o.wrap_after,
+                comma_first: o.comma_first,
+                compact: o.compact,
+            },
+            stack,
+        )
+    });
+    let mut aligned = o
+        .reindent_aligned
+        .then(|| Aligned::new(o.indent_tabs, stack));
     let view: Vec<(&'static str, &str)> = tokens.iter().map(|(t, v)| (*t, v.as_str())).collect();
     let mut out = String::with_capacity(text.len());
     for (count, range) in statements(&view).into_iter().enumerate() {
-        let mut stmt: Vec<(&'static str, String)> = tokens[range].to_vec();
-        if let Some(kind) = plan.output {
-            stmt = output_filter(kind, stmt, count + 1);
-        }
-        let joined: String = stmt.iter().map(|(_, v)| v.as_str()).collect();
-        let lines: Vec<&str> = split_unquoted_newlines(&joined)
-            .into_iter()
-            .map(pystr::rstrip)
-            .collect();
-        out.push_str(&lines.join("\n"));
+        let stmt = &tokens[range];
+        let text = if plan.grouping {
+            let mut tree = Tree::statement(stmt);
+            grouping::group(&mut tree, stack, 4)?;
+            if o.use_space_around_operators {
+                filters::spaces_around_operators(&mut tree, ROOT);
+            }
+            if o.strip_comments {
+                filters::strip_comments(&mut tree, ROOT);
+            }
+            if plan.strip_whitespace {
+                filters::strip_whitespace(&mut tree)?;
+            }
+            if let Some(r) = &mut reindent {
+                r.run(&mut tree)?;
+            }
+            if let Some(a) = &mut aligned {
+                a.run(&mut tree)?;
+            }
+            if o.right_margin.is_some() {
+                // RightMarginFilter.process is `raise NotImplementedError`
+                return Err("NotImplementedError: ".into());
+            }
+            let text = tree.to_str(ROOT);
+            let text = match plan.output {
+                Some(kind) => {
+                    let top = tree
+                        .tokens(ROOT)
+                        .iter()
+                        .map(|&id| (tree.n[id].is_whitespace, tree.value(id)));
+                    output_filter(kind, &text, top, count + 1)
+                }
+                None => text,
+            };
+            if let Some(r) = &mut reindent {
+                // with an output filter the statement's tokens became a generator that the serializer used
+                // up, so str(stmt) is '' when the next statement looks at it
+                r.finish(plan.output.is_none() && text.ends_with('\n'));
+            }
+            text
+        } else {
+            let joined: String = stmt.iter().map(|(_, v)| v.as_str()).collect();
+            match plan.output {
+                Some(kind) => {
+                    let top = stmt.iter().map(|(t, v)| (is_a(t, WHITESPACE), v.as_str()));
+                    output_filter(kind, &joined, top, count + 1)
+                }
+                None => joined,
+            }
+        };
+        serialize(&text, &mut out);
     }
     Ok(out)
+}
+
+/// `sqlparse.parse(text)`: the grouped statements.
+pub(crate) fn parse(text: &str, stack: &Stack) -> Result<Vec<Tree>, String> {
+    let tokens: Vec<(&'static str, String)> = lexer::tokenize(text)
+        .into_iter()
+        .map(|(t, v)| (t, v.to_string()))
+        .collect();
+    let view: Vec<(&'static str, &str)> = tokens.iter().map(|(t, v)| (*t, v.as_str())).collect();
+    let mut trees = Vec::new();
+    for range in statements(&view) {
+        let mut tree = Tree::statement(&tokens[range]);
+        grouping::group(&mut tree, stack, 3)?;
+        trees.push(tree);
+    }
+    Ok(trees)
 }

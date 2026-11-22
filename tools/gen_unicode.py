@@ -11,9 +11,11 @@ must reproduce, asked of Python code point by code point.
   Only these two facts matter to the algorithm (a case-ignorable character is always skipped), so
   CASE_IGNORABLE and CASED (for the others) are exact for what lower() does.
 - NOT_PRINTABLE: not c.isprintable(), for repr().
+- WORD: what `\w` matches in a str pattern (for ``).
 """
 
 import os
+import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -64,6 +66,9 @@ def main():
     nonprint = [cp for cp in CPS if not chr(cp).isprintable()]
     parts.append('/// Not str.isprintable().\n'
                  f'pub(crate) static NOT_PRINTABLE: &[(u32, u32)] = &{ranges(nonprint)};\n')
+    word = [cp for cp in CPS if re.match(r'\w', chr(cp))]
+    parts.append('\n/// Matched by `\\w` in a str pattern.\n'
+                 f'pub(crate) static WORD: &[(u32, u32)] = &{ranges(word)};\n')
     print('case-ignorable', len(ign), 'cased', len(cased), 'not printable', len(nonprint))
     with open(OUT, 'w', encoding='utf-8', newline='\n') as f:
         f.write(''.join(parts))

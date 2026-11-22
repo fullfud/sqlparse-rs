@@ -20,6 +20,18 @@ def split(sql: str, strip_semicolon: bool = False) -> list[str]:
     return sqlparse.split(sql, strip_semicolon=strip_semicolon)
 
 
+def parse_tree(sql: str) -> list:
+    """sqlparse.parse() as plain data, one entry per statement. A leaf is [type, value, normalized], a group
+    [class name, value, children], with the values sqlparse keeps (a group's is joined when the group is made
+    and not refreshed later). A node whose parent is not the group holding it gets '!parent' on its name."""
+    def node(tok, parent):
+        mark = '' if tok.parent is parent else '!parent'
+        if tok.is_group:
+            return [type(tok).__name__ + mark, tok.value, [node(c, tok) for c in tok.tokens]]
+        return [str(tok.ttype) + mark, tok.value, tok.normalized]
+    return [node(stmt, None) for stmt in sqlparse.parse(sql)]
+
+
 def format(
     sql: str,
     keyword_case: str | None = None,

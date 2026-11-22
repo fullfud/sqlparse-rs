@@ -90,5 +90,6 @@ def _method(name, positions, names, json_result):
 tokenize = _native.tokenize
 split = _native.split
 format = _native.format
+parse_tree = _native.parse_tree
 
-__all__ = ['tokenize', 'split', 'format']
+__all__ = ['tokenize', 'split', 'format', 'parse_tree']

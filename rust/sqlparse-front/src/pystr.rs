@@ -178,3 +178,40 @@ pub(crate) fn repr(s: &str) -> String {
     out.push(quote);
     out
 }
+
+/// `s.splitlines()`.
+pub(crate) fn splitlines(s: &str) -> Vec<&str> {
+    let mut lines = Vec::new();
+    let mut start = 0;
+    let mut it = s.char_indices().peekable();
+    while let Some((i, c)) = it.next() {
+        let end = match c {
+            '\r' => {
+                if let Some(&(_, '\n')) = it.peek() {
+                    it.next();
+                    i + 2
+                } else {
+                    i + 1
+                }
+            }
+            '\n' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}'
+            | '\u{2029}' => i + c.len_utf8(),
+            _ => continue,
+        };
+        lines.push(&s[start..i]);
+        start = end;
+    }
+    if start < s.len() {
+        lines.push(&s[start..]);
+    }
+    lines
+}
+
+/// `len(s)`: code points.
+pub(crate) fn len(s: &str) -> usize {
+    if s.is_ascii() {
+        s.len()
+    } else {
+        s.chars().count()
+    }
+}

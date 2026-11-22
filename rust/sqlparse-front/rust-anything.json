@@ -52,7 +52,7 @@
     {
       "name": "format",
       "file": "front/sqlparse_front.py",
-      "line": 23,
+      "line": 35,
       "params": [
         {
           "name": "sql",
@@ -188,6 +188,24 @@
         }
       ],
       "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "parse_tree",
+      "file": "front/sqlparse_front.py",
+      "line": 23,
+      "params": [
+        {
+          "name": "sql",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown[]",
       "is_async": false,
       "is_generator": false,
       "type_params": [],

@@ -12,12 +12,18 @@ mod lexer;
 #[path = "lexer_tables.rs"]
 #[rustfmt::skip]
 mod lexer_tables;
+#[path = "filters.rs"]
+mod filters;
 #[path = "format.rs"]
 mod format;
+#[path = "grouping.rs"]
+mod grouping;
 #[path = "pystr.rs"]
 mod pystr;
 #[path = "split.rs"]
 mod split;
+#[path = "tree.rs"]
+mod tree;
 #[path = "pyunicode_tables.rs"]
 #[rustfmt::skip]
 mod pyunicode_tables;
@@ -117,5 +123,79 @@ pub fn format(
             right_margin,
             output_format,
         },
+        &python_stack(),
     )
+}
+
+/// Where Python's recursion limit stands for a call of the front door made from here: the frames on the
+/// stack (the caller's and below) plus the front door's own, and `sys.getrecursionlimit()`.
+fn python_stack() -> grouping::Stack {
+    use pyo3::prelude::*;
+    pyo3::Python::attach(|py| -> Option<grouping::Stack> {
+        let sys = py.import("sys").ok()?;
+        let limit: usize = sys.call_method0("getrecursionlimit").ok()?.extract().ok()?;
+        let mut frame = sys.call_method1("_getframe", (0,)).ok()?;
+        let mut depth = 1;
+        loop {
+            let back = frame.getattr("f_back").ok()?;
+            if back.is_none() {
+                break;
+            }
+            depth += 1;
+            frame = back;
+        }
+        Some(grouping::Stack::python(depth + 1, limit, exact_base))
+    })
+    .unwrap_or_else(grouping::Stack::unlimited)
+}
+
+/// What the probe's count is off by, against counting frames (measured with tools/check_recursion.py).
+const PROBE_OFFSET: usize = 1;
+
+/// The exact `base` for a front-door call made from here: how many more Python calls fit before
+/// RecursionError, taken from the limit.
+fn exact_base() -> Option<usize> {
+    use pyo3::prelude::*;
+    pyo3::Python::attach(|py| -> Option<usize> {
+        let code = c"def probe():\n    n = 0\n    def down():\n        nonlocal n\n        n += 1\n        down()\n    try:\n        down()\n    except RecursionError:\n        pass\n    return n\n";
+        let scope = pyo3::types::PyDict::new(py);
+        py.run(code, Some(&scope), None).ok()?;
+        let fits: usize = scope.get_item("probe").ok()??.call0().ok()?.extract().ok()?;
+        let limit: usize = py
+            .import("sys")
+            .ok()?
+            .call_method0("getrecursionlimit")
+            .ok()?
+            .extract()
+            .ok()?;
+        limit.checked_sub(fits + PROBE_OFFSET)
+    })
+}
+
+fn tree_value(t: &tree::Tree, id: tree::Id, parent: Option<tree::Id>) -> serde_json::Value {
+    let mark = if t.n[id].parent == parent {
+        ""
+    } else {
+        "!parent"
+    };
+    if t.is_group(id) {
+        let children: Vec<serde_json::Value> = t
+            .tokens(id)
+            .iter()
+            .map(|&c| tree_value(t, c, Some(id)))
+            .collect();
+        serde_json::json!([format!("{}{mark}", t.cls(id).name()), t.value(id), children])
+    } else {
+        let ttype = t.n[id].ttype.unwrap_or("None");
+        serde_json::json!([format!("{ttype}{mark}"), t.value(id), t.normalized(id)])
+    }
+}
+
+/// Port of `parse_tree` (`front/sqlparse_front.py`).
+pub fn parse_tree(sql: String) -> Result<Vec<serde_json::Value>, String> {
+    let trees = format::parse(&sql, &python_stack())?;
+    Ok(trees
+        .iter()
+        .map(|t| tree_value(t, tree::ROOT, None))
+        .collect())
 }

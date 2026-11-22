@@ -23,7 +23,7 @@ pub(crate) fn is_a(ttype: &str, parent: &str) -> bool {
 }
 
 /// `value.split()[0]` (None where Python raises IndexError: no word at all).
-fn first_word(value: &str) -> Option<&str> {
+pub(crate) fn first_word(value: &str) -> Option<&str> {
     value.split(pystr::isspace).find(|w| !w.is_empty())
 }
 
