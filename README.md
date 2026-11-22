@@ -1,128 +1,138 @@
 # sqlparse-rs
 
-[sqlparse](https://github.com/andialbrecht/sqlparse) rewritten in Rust, with proof that it gives the same
-results as the original: the same output for every recorded input, down to the byte.
+**[sqlparse](https://github.com/andialbrecht/sqlparse)'s `format()` and `split()`, rewritten in Rust: same
+output, byte for byte, 25-34 times faster.**
 
-sqlparse is a pure-Python SQL parser and formatter. It gets about 30 million downloads a week on PyPI, Django
-depends on it, and people complain that it is slow, sometimes quadratically so. No Rust library gives the
-same output: sqloxide and sqlformat-rs parse SQL differently. This project closes that gap. It is a drop-in
-`format()` and `split()` that runs much faster and returns what sqlparse returns.
-
-## Use it
-
-```sh
-pip install .            # from a checkout (needs Rust); builds the wheel with maturin, pulls sqlparse==0.6.1
-```
+sqlparse is the pure-Python SQL splitter and formatter that Django depends on (every SQL script a migration
+runs goes through `sqlparse.split` and `sqlparse.format`, and the test runner formats debug SQL with it), along
+with many other tools and scripts. It is also slow: formatting two megabytes of SQL takes over ten seconds. Rust SQL libraries
+(sqlparser-rs, sqlformat-rs, sqloxide) are fast, but they format differently, so switching to them changes
+your output. This project ports sqlparse itself, quirks included, and proves the port gives the same answer
+as the original on every input it has been shown.
 
 ```python
 import sqlparse_rs
 
-sqlparse_rs.format(sql, reindent=True, keyword_case='upper')   # sqlparse.format's signature and result
-sqlparse_rs.split(sql)                                          # sqlparse.split's
+sqlparse_rs.format(sql, reindent=True, keyword_case='upper')   # == sqlparse.format(sql, reindent=True, ...)
+sqlparse_rs.split(sql)                                          # == sqlparse.split(sql)
 
-sqlparse_rs.install()     # sqlparse.format / sqlparse.split are now these, for every caller that looks them up
-                          # on the module (Django's sqlmigrate and the like); uninstall() puts them back
+sqlparse_rs.install()    # from now on sqlparse.format / sqlparse.split are the Rust ones, for every caller
 ```
 
-A call runs in Rust only when it is inside what was proven: the installed sqlparse is 0.6.1, `sql` is a `str`
-with no `encoding`, sqlparse's default lexer is unchanged, and every option has exactly the type the port
-takes (`True`/`False`, not `1` or `None`; `int`, not `4.0`; `indent_width` at most 4096). Anything else goes to
-sqlparse itself, unchanged, so the answer is always sqlparse's. Errors are sqlparse's too: an invalid option or
-a statement nested past Python's recursion limit raises `sqlparse.exceptions.SQLParseError` with sqlparse's
-message, at the same nesting depth. The rules are in `python/sqlparse_rs/__init__.py`.
+```sh
+sqlformat-rs -r -k upper query.sql      # sqlparse's own `sqlformat` command, formatting in Rust
+```
 
-## How it works
+## Results
 
-The Rust is checked with [rust-anything](https://github.com/erkamyaman/rust-anything):
+The whole benchmark corpus (440 files, 2.1 MB of SQL: generated queries and scripts), sqlparse 0.6.1 against
+`sqlparse_rs` through the same public calls, CPython 3.11, Windows 11, best of 3, every result checked equal
+([`bench/bench_package.py`](bench/bench_package.py)):
 
-1. `upstream/` is the original, a git submodule pinned to release **0.6.1**. Nothing in it is changed.
-2. `front/sqlparse_front.py` is the front door: `tokenize`, `split` and `format` (with all of its options)
-   as plain typed functions over strings, plus `parse_tree`, `parse()`'s statement tree as plain lists, so the
-   tree itself is checked node by node. Only strings and plain data cross the bridge.
-3. `rust/sqlparse-front/` is the Rust crate (PyO3). The port is written in `src/port.rs` and the files it uses.
-4. `rust-anything record` runs the original on generated edge cases plus real SQL (`bench/make_inputs.py`:
-   the benchmark corpus and sqlparse's own test files, through every format option set people use) and
-   saves what each call returns or raises. `diff` replays all of it on the Rust; a piece is done when every
-   case matches and `gate` passes.
-
-## Plan
-
-Port in the order data flows through sqlparse, each step proven before the next:
-
-| Step | Front-door function | sqlparse code | State |
-| --- | --- | --- | --- |
-| 1 | `tokenize` | `tokens.py`, `keywords.py`, `lexer.py` (the regex lexer and keyword tables) | **done**: 666/666 recorded, 0 of 32,986 checked texts differ, 15x faster |
-| 2 | `split` | `engine/statement_splitter.py` | **done**: 1123/1123 recorded, 0 of 10 million checked texts differ, 12x faster |
-| 3 | `format`, `parse_tree` | `engine/grouping.py`, `sql.py` (the token tree), `filters/*`, `formatter.py` | **done**: every recorded tree and format result matches (see below), 17-22x faster |
-| 4 | package | `sqlparse_rs`: `format`/`split` in Rust, sqlparse for anything outside what was proven | **done**: sqlparse's own 537 tests pass with it installed, 6,090 corpus calls same as sqlparse, 13-20x faster |
-
-Where the time went in sqlparse (`docs/profile-format.md`): grouping 58 %, lexing and splitting 27 %, the
-reindent filters 9 %. `parse()` returns sqlparse's Python token tree to callers, so it stays in Python;
-`format()` and `split()` are the calls worth replacing whole, and both run entirely in Rust now.
-
-## Numbers
-
-Baseline, sqlparse 0.6.1 on CPython 3.11, the 2.1 MB benchmark corpus (`bench/workload.py`):
-
-| Call | Python |
-| --- | ---: |
-| `split` | 3.5 s |
-| `format` (reindent + upper keywords, and strip comments) | 23.0 s |
-| `parse` | 10.3 s |
-
-Recording: 7842 cases (format 5427, split 1123, tokenize 666, parse_tree 626; 327 of them errors the
-original raises). `rust-anything diff`: **7842/7842 match**, errors with sqlparse's own `SQLParseError` class.
-
-All of it, same corpus, through the bridge (best of 1; `cargo run --release --example bench_format` for Rust
-alone):
-
-| Call | Python | Rust | Rust alone |
+| Call | sqlparse | sqlparse_rs | Speed-up |
 | --- | ---: | ---: | ---: |
-| `split` | 4.14 s | **0.35 s (12x)** | |
-| `format(keyword_case='upper')` (no tree) | 4.01 s | **0.30 s (13x)** | |
-| `format(reindent=True, keyword_case='upper')` | 15.42 s | **0.90 s (17x)** | 0.66 s |
-| `format(strip_comments=True)` | 13.63 s | **0.82 s (17x)** | 0.53 s |
-| `format(reindent_aligned=True)` | 13.91 s | **0.62 s (22x)** | 0.62 s |
-| `parse` (lex, split, group: the tree) | 12.74 s | | 0.51 s |
+| `split(sql)` | 3.52 s | 0.104 s | **34x** |
+| `format(sql, keyword_case='upper')` | 3.77 s | 0.153 s | **25x** |
+| `format(sql, reindent=True, keyword_case='upper')` | 12.57 s | 0.510 s | **25x** |
+| `format(sql, strip_comments=True)` | 10.76 s | 0.367 s | **29x** |
+| `format(sql, reindent_aligned=True)` | 11.44 s | 0.417 s | **27x** |
+| `format(sql, reindent=True, indent_columns=True, comma_first=True)` | 12.33 s | 0.475 s | **26x** |
 
-Lexer (step 1), same corpus, best of 3:
+| What was checked | Result |
+| --- | --- |
+| Recorded cases (`rust-anything diff`): the original run on the corpus, sqlparse's own test files and generated edge cases, through every option | **7,842 / 7,842 identical**, errors included |
+| sqlparse's own test suite, with `sqlparse_rs.install()` | **537 passed**, same 2 xfail / 1 xpass as plain sqlparse |
+| Statement trees (`tools/check_tree.py`): every node's class, value, type and parent, on the corpus, sqlparse's test files, 2,730 cuts of them, 40,000 random scripts and limit inputs | **260,837 calls, 0 differ** |
+| Lexer (`tools/check_tokenize.py`): recorded texts, cuts of them, random texts | **32,986 texts, 0 differ** |
+| Case filters over every Unicode code point (`tools/check_format_flat.py`) | **26.7 million texts, 0 differ** |
+| Package against sqlparse (`tools/check_package.py`): corpus x 13 option sets, split, CLI, bad option types, lexer changes | **6,090 calls in Rust, 0 differ**; 18 out-of-range calls all answered by sqlparse |
+| Fresh random cases (`rust-anything fuzz --time 600`) | **282,550 / 282,556**; the 6 pass `None` where the front door types `str`/`bool` (a known difference of the test bindings, see below) |
+| Python's recursion limit (`tools/check_recursion.py`): 11 deep-nesting shapes, 3 caller depths, through C calls | **fails at exactly the same size** on CPython 3.10, 3.11, 3.12, 3.13, 3.14 |
+| Platforms | Windows x64 (CPython 3.10-3.14), Linux x64 (manylinux2014 wheel, CPython 3.12 under WSL Ubuntu 24.04) |
 
-| | Python | Rust |
-| --- | ---: | ---: |
-| `tokenize`, Rust alone (`cargo run --release --example bench_lexer`) | 2.86 s | **0.19 s (15x)** |
-| `tokenize` through the bridge (800k tuples back to Python) | 2.86 s | 0.95 s (3x) |
+## Install
 
-`format()` and `split()` return one string, so they do not pay the bridge's per-token cost.
+Not on PyPI yet. From a checkout (needs a Rust toolchain; builds with [maturin](https://www.maturin.rs/)):
 
-The package (`sqlparse_rs.format`/`split` against `sqlparse.format`/`split`, the corpus's 400 statement files,
-0.58 MB, best of 1):
+```sh
+pip install .                      # pulls sqlparse==0.6.1, installs sqlparse_rs and the sqlformat-rs command
+```
 
-| Call | sqlparse | sqlparse_rs |
-| --- | ---: | ---: |
-| `split` | 0.98 s | **0.07 s (13x)** |
-| `format(keyword_case='upper')` | 1.05 s | **0.07 s (15x)** |
-| `format(reindent=True, keyword_case='upper')` | 3.66 s | **0.20 s (19x)** |
-| `format(strip_comments=True)` | 3.09 s | **0.15 s (20x)** |
+or build wheels to copy elsewhere: `maturin build --release` (an abi3 wheel: one file for every CPython from 3.10 on).
+`maturin build --release --zig --target x86_64-unknown-linux-gnu --compatibility manylinux2014 -i python3.11`
+builds the Linux wheel from Windows.
+
+## Use
+
+`sqlparse_rs.format(sql, encoding=None, **options)` and `sqlparse_rs.split(sql, encoding=None,
+strip_semicolon=False)` take exactly what sqlparse's take and return exactly what they return, errors
+included: an invalid option raises `sqlparse.exceptions.SQLParseError` with sqlparse's message, and a
+statement nested past Python's recursion limit raises sqlparse's `SQLParseError('Maximum recursion depth
+exceeded')` at the same nesting depth.
+
+`sqlparse_rs.install()` replaces `sqlparse.format` and `sqlparse.split` on the module, so every caller that
+writes `sqlparse.format(...)` (Django's `prepare_sql_script` and test runner, the `sqlformat` CLI) gets the Rust
+without changing a line. A name bound before with `from sqlparse import format` keeps the original.
+`uninstall()` puts sqlparse's functions back. `install()` refuses (returns False) if the installed sqlparse is
+not 0.6.1.
+
+`sqlformat-rs` (or `python -m sqlparse_rs`) is sqlparse's `sqlformat`, same arguments, output and exit codes.
+
+### When the Rust runs, and when sqlparse does
+
+A call runs in Rust only when it is inside what was proven. Everything else goes to sqlparse itself,
+unchanged, so the answer is always sqlparse's:
+
+| Runs in Rust | Goes to sqlparse |
+| --- | --- |
+| sqlparse 0.6.1 installed | any other sqlparse version |
+| `sql` is a `str` (any `encoding`: sqlparse only uses it for bytes) | bytes, a stream, a `str` subclass, a `str` with lone surrogates |
+| sqlparse's default lexer as sqlparse sets it up | after `Lexer.add_keywords`, `set_SQL_REGEX`, `clear` (Rust again after `default_initialization()`) |
+| options of exactly the type the port takes: `True`/`False`, `int`, `str`, `None` where allowed | `reindent=1`, `reindent=None`, `indent_width=4.0`, a `str` subclass, an `int` past 64 bits |
+| `indent_width` up to 4096 | a larger `indent_width` (see Limits) |
+| keywords sqlparse never reads (`filename`, `outfile`, ... as the CLI passes them) are dropped, as sqlparse ignores them | |
+
+The rules are in [`python/sqlparse_rs/__init__.py`](python/sqlparse_rs/__init__.py).
+
+`sqlparse.parse()` is not replaced: it returns sqlparse's Python token tree, which callers walk and change, so
+it has to stay Python objects. The Rust builds the same tree (checked node by node above) but uses it only
+inside `format()`.
+
+## How it is proven
+
+The port is checked with [rust-anything](https://github.com/erkamyaman/rust-anything), a tool that records a
+Python library's behaviour and replays it against a Rust port:
+
+1. `upstream/` is sqlparse itself, a git submodule pinned to release **0.6.1**. Nothing in it is changed.
+2. [`front/sqlparse_front.py`](front/sqlparse_front.py) is the front door: `tokenize`, `split`, `format`
+   with every option, and `parse_tree` (`parse()`'s tree as plain lists, so the tree is compared node by node).
+3. `rust-anything record` runs the original on generated edge cases and real SQL
+   ([`bench/make_inputs.py`](bench/make_inputs.py): the benchmark corpus and sqlparse's own test files, through
+   the option sets people use) and saves what every call returns or raises.
+4. `rust-anything diff` replays all of it against the Rust (`rust/sqlparse-front/`); `fuzz` generates fresh
+   inputs and compares the two live; `gate` runs fmt, clippy, tests, no-`unsafe`, no-panic and the replay.
+5. The scripts in [`tools/`](tools) go further than the recording: every Unicode code point through the
+   lexer and case filters, hundreds of thousands of trees, the recursion threshold, and the package's public
+   calls against sqlparse's.
 
 ### How the lexer matches Python's `re`
 
-Python 3.11 and Rust disagree on `\w`, `\s`, `\d`, `` and case-insensitive letters outside ASCII (Unicode 14
-against a newer table, combining marks, numerics like `½`, `ſ` and the Kelvin sign). `tools/gen_lexer.py`
-writes `src/lexer_tables.rs` from sqlparse itself: every character class in `SQL_REGEX` becomes the exact set
-of code points Python's `re` matches, asked code point by code point; patterns run on fancy-regex so
-lookahead and backtracking behave as in `re` (`123abc` lexes as `12` + `3abc` in both); one-character
-lookbehinds are checked on the character before the match, which `re.match(text, pos)` also sees. Each rule
-also gets the set of characters a match can start with, from Python's own parse of the pattern, so a
-position only tries the rules that can match there.
-
-`tools/check_tokenize.py` compares both on every recorded text, three random cuts of each (unclosed strings,
-comments, dollar quotes) and 30,000 random texts built from the pieces where the engines part.
+Python 3.11 and Rust disagree on `\w`, `\s`, `\d`, `\b` and case-insensitive letters outside ASCII (Unicode 14
+against a newer table, combining marks, numerics like `½`, `ſ` and the Kelvin sign).
+[`tools/gen_lexer.py`](tools/gen_lexer.py) writes `src/lexer_tables.rs` from sqlparse itself: every character
+class in `SQL_REGEX` becomes the exact set of code points Python's `re` matches, asked code point by code
+point. Patterns with lookahead run on fancy-regex, so backtracking behaves as in `re` (`123abc` lexes as `12`
++ `3abc` in both); one-character lookbehinds are checked on the character before the match. Each rule gets the
+set of characters a match can start with, so a position only tries the rules that can match there, and each
+rule with lookaround gets a lookaround-free *prefilter* that every match also matches, run first on the
+regex crate's DFA: where it finds nothing, the slow backtracking engine is skipped.
 
 ### How the tree matches sqlparse's
 
-`src/tree.rs` is `sql.py` on an arena, `src/grouping.rs` is `grouping.py` function by function in `group()`'s
-order, `src/filters.rs` the filters that work on the tree. What sqlparse does by accident is kept, because
-output depends on it:
+[`src/tree.rs`](rust/sqlparse-front/src/tree.rs) is `sql.py` on an arena,
+[`src/grouping.rs`](rust/sqlparse-front/src/grouping.rs) is `grouping.py` function by function, and
+[`src/filters.rs`](rust/sqlparse-front/src/filters.rs) the filters that work on the tree. What sqlparse does by
+accident is kept, because output depends on it:
 
 - a group's `value` is joined when the group is made and never refreshed: the reindent filter measures
   identifiers by it, and the Python/PHP output filters print it, after strip_whitespace has changed the
@@ -130,69 +140,102 @@ output depends on it:
 - `normalized`, `is_keyword` and `is_whitespace` are taken at creation (`group_operator` later retypes `*`);
 - `_group` walks a copy of the list taken at the start, so a token already moved into a group is still looked
   at, with an index that is off; `tidx_offset` and the stale `prev_` are reproduced;
-- `ttype in T.X` (subtypes) against `ttype in (T.X, T.Y)` (equality) and `isinstance(x, TokenList)` (any group,
-  which `align_comments` extends) are told apart everywhere;
+- `ttype in T.X` (subtypes) against `ttype in (T.X, T.Y)` (equality) and `isinstance(x, TokenList)` (any group)
+  are told apart everywhere;
 - tokens put in with `tokens.insert` have no parent, which `_current_line_len` and `within()` see;
 - with an output format, the statement's tokens become a generator the serializer uses up, so the reindent
   filter separates the next statement as if the last one were `''`;
 - the limits raise what sqlparse raises: grouping depth 100, 10,000 tokens, `right_margin` is
   `NotImplementedError`, and Python's own recursion limit, which ~980 nested BEGIN blocks or BETWEEN chains
-  reach: the port counts the frames sqlparse would use from the caller's real stack depth (asking Python for
-  the exact headroom near the limit), so it fails from exactly the same size (`tools/check_recursion.py`).
+  reach. The port counts the frames sqlparse would use from the caller's real stack depth, asks Python for
+  the exact headroom when close to the limit, and knows that CPython 3.12+ no longer counts C calls (such as
+  `''.join`) against it, so it fails from exactly the same size as sqlparse on every version.
 
-Checks besides the recording: `tools/check_tree.py` (every corpus and sqlparse test file, cuts of them,
-40,000 random scripts and limit inputs: 260,837 calls of `parse_tree` and 18 format option sets, 0 differ),
-`tools/check_format_flat.py` (26.7 million case-filter texts over every code point, 0 differ),
-`rust-anything fuzz` (161,856 fresh cases: only the known differences).
+## Speed
 
-The package: `tools/run_upstream_package.py` runs sqlparse's own test suite with `sqlparse_rs.install()` (537
-passed, the same 2 xfail and 1 xpass as sqlparse alone; 157 format and 9 split calls ran in Rust).
-`tools/check_package.py` compares the public calls: the corpus through 13 option sets and split (6,090 calls,
-all in Rust, 0 differ), 21 calls outside the proven types (bytes, `encoding`, `reindent=None` or `1`, a `str`
-subclass, lone surrogates, an unknown option, huge widths: all answered by sqlparse, same result), a changed
-default lexer (`add_keywords`, `set_SQL_REGEX`: sqlparse; after `default_initialization()`: Rust again), and
-install/uninstall. `tools/check_recursion.py package` finds the recursion threshold through the package: one
-frame later than through the front door, as in sqlparse, 0 mismatches.
+The Rust alone, no Python (`cargo run --release --example bench_format`, `bench_lexer`, `bench_split`), same
+corpus, best of 3, before and after the last optimisation pass:
 
-### Known differences
+| Step | first port | now |
+| --- | ---: | ---: |
+| lex (`tokenize`, 799k tokens) | 0.19 s | **0.087 s** |
+| `split` | 0.21 s | **0.10 s** |
+| `parse` (lex, split, group) | 0.50 s | **0.36 s** |
+| `format(reindent=True, keyword_case='upper')` | 0.62 s | **0.48 s** |
+| `format(strip_comments=True)` | 0.49 s | **0.37 s** |
+| `format(reindent_aligned=True)` | 0.55 s | **0.41 s** |
 
-- **Exception class** (needs rust-anything with dotted exception kinds, branch `feat/python-custom-exceptions`
-  of the fork, not released yet). The port returns `Err("sqlparse.exceptions.SQLParseError: ...")` and the
-  bindings raise sqlparse's own class. With a rust-anything that lacks it, the same message comes as ValueError.
-- **`None` for a bool option.** sqlparse treats `format(sql, reindent=None)` as False; the bindings take a
-  bool and raise TypeError. Outside the declared types; the package passes such calls to sqlparse.
-- The recursion limit is modelled for CPython 3.11, where it was measured.
-- **Out of memory.** sqlparse raises MemoryError; Rust cannot catch a failed allocation and stops the process.
-  The indent string, the one thing that grows with an option rather than with the input, is allocated as
-  Python does it (OverflowError past `sys.maxsize`, MemoryError when it cannot be had), but a later copy of a
-  gigabyte-sized result can still fail. Only a huge `indent_width` makes a small statement that big, so the
-  package gives `indent_width` above 4096 to sqlparse.
+The package adds little on top (the string crosses into Rust and back once per call, plus a look at the
+Python stack for the recursion limit).
+
+Where the Rust spends its time now on `format(reindent=True)`, whole corpus: grouping 40 % (spread over 19
+passes, the largest, `group_matching`, 8 %), lexing 20 %, the reindent filter 18 %, building the tree and
+copying tokens 8 %. No single hot spot is left; going further would mean merging grouping passes, which
+sqlparse runs one after another over the whole tree and whose order the output depends on.
+
+What made it fast besides being Rust: tokens are spans into one string, the tree is an arena of indices,
+grouping passes walk the tree instead of rebuilding lists, keyword lookups use a sorted table without
+allocating, and the lexer skips most regex work (first-character table, DFA prefilters for lookaround rules:
+the last pass made the lexer 2.2x faster with them).
+sqlparse spends 58 % of `format()` in grouping, 27 % lexing and splitting and 9 % in the reindent filter
+([`docs/profile-format.md`](docs/profile-format.md)); its quadratic spots (`_current_line_len` re-joining the
+whole statement for every line) are walked backwards to the last line break in the port.
+
+## Limits and known differences
+
+- **Out of memory.** sqlparse raises `MemoryError`; Rust cannot catch a failed allocation and stops the
+  process. The indent string, the one thing that grows with an option rather than with the input, is
+  allocated as Python does it (`OverflowError` past `sys.maxsize`, `MemoryError` when it cannot be had), but a
+  later copy of a gigabyte-sized result can still fail. Only a huge `indent_width` makes a small statement
+  that big, so the package gives `indent_width` above 4096 to sqlparse.
 - **A call the package hands to sqlparse** has the package's frame on the stack as well, so sqlparse's own
   recursion limit comes one nesting level sooner than when called directly.
+- **The front-door bindings** (`rust/sqlparse-front`, used for the recording) take typed arguments: `None`
+  for a bool option is a `TypeError` there, where sqlparse treats it as False. The package never sends such
+  calls to the Rust.
+- **Exception class** needs rust-anything with dotted exception kinds
+  ([erkamyaman/rust-anything#207](https://github.com/erkamyaman/rust-anything/pull/207), not merged yet) to
+  regenerate the bindings; the bindings in this repository already raise sqlparse's own `SQLParseError`.
+- **Not tested:** macOS, ARM, PyPy, free-threaded CPython.
 
-## Run it
+## Layout
+
+| Path | What |
+| --- | --- |
+| `python/sqlparse_rs/` | the package: `format`, `split`, `install`, the CLI |
+| `rust/sqlparse-front/src/` | the port: `lexer.rs`, `split.rs`, `tree.rs`, `grouping.rs`, `filters.rs`, `format.rs`, `port.rs` (about 3,800 hand-written lines); `lexer_tables.rs`, `pyunicode_tables.rs` are generated from Python by `tools/gen_lexer.py` and `tools/gen_unicode.py`; `lib.rs` and the conversions are generated by rust-anything |
+| `front/` | the front door rust-anything records and replays |
+| `upstream/` | sqlparse 0.6.1 (git submodule) |
+| `bench/` | corpus generator (`gen_corpus.py`, same seed = same bytes), Python workload, recording inputs, `bench_package.py` |
+| `tools/` | the checks listed above, generators, `run_upstream_package.py` |
+
+## Development
 
 ```sh
 git submodule update --init
-python -m venv .venv && .venv/Scripts/python -m pip install -e ./upstream pytest
-.venv/Scripts/python -X utf8 bench/gen_corpus.py          # the corpus (not committed, same seed = same bytes)
-.venv/Scripts/python -X utf8 bench/workload.py            # Python timings
-.venv/Scripts/python -X utf8 bench/make_inputs.py         # real cases for the recording
-# with .venv/Scripts first on PATH, so rust-anything's Python sees the pinned sqlparse:
+python -m venv .venv && .venv/Scripts/python -m pip install -e ./upstream pytest maturin
+.venv/Scripts/python -X utf8 bench/gen_corpus.py          # the corpus (not committed)
+.venv/Scripts/python -X utf8 bench/make_inputs.py         # inputs for the recording
+
+# the port, with .venv/Scripts first on PATH so rust-anything's Python sees the pinned sqlparse:
 rust-anything record rust/sqlparse-front --inputs rust/sqlparse-front/inputs.jsonl
 rust-anything build rust/sqlparse-front
 rust-anything diff rust/sqlparse-front
 rust-anything gate rust/sqlparse-front
+cargo run --release --manifest-path rust/sqlparse-front/Cargo.toml --example bench_format   # Rust alone
 
-# the package, into the venv:
-.venv/Scripts/python -m pip install maturin && VIRTUAL_ENV=.venv maturin develop --release
+# the package:
+VIRTUAL_ENV=.venv maturin develop --release
 .venv/Scripts/python -X utf8 tools/run_upstream_package.py
 .venv/Scripts/python -X utf8 tools/check_package.py
 .venv/Scripts/python -X utf8 tools/check_recursion.py package
-maturin build --release --out dist && maturin sdist --out dist     # wheel and sdist
+.venv/Scripts/python -X utf8 bench/bench_package.py
 ```
+
+`rust-anything gate` passes everything except `size`: it compares the Rust's line count with the 59-line
+front door, and most of the Rust is the generated Unicode and lexer tables.
 
 ## License
 
-BSD-3-Clause, like sqlparse (`LICENSE`). The port follows sqlparse's code closely, so sqlparse's copyright
-notice is kept next to ours.
+BSD-3-Clause, like sqlparse ([`LICENSE`](LICENSE)). The port follows sqlparse's code closely, so sqlparse's
+copyright notice is kept next to ours.
