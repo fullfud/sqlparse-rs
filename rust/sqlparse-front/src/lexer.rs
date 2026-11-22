@@ -574,9 +574,9 @@ mod fast_path_tests {
         for b in b'1'..=b'9' {
             assert_eq!(cands(b), vec![19, 20, 21, 45], "{}", b as char);
         }
-        for i in 26..=44 {
+        for (i, rule) in r.all.iter().enumerate().take(45).skip(26) {
             assert!(
-                matches!(r.all[i].before, Before::Any),
+                matches!(rule.before, Before::Any),
                 "rule {i} has a lookbehind"
             );
         }
