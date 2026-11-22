@@ -38,6 +38,121 @@ pub fn token_type_names() -> Vec<&'static str> {
     lexer::type_names()
 }
 
+/// Not part of the front door: `sqlparse.parse(sql)`'s statements, grouped in Rust, as a tree per statement.
+/// The recursion limit is counted as for `sqlparse.parse` called where the package's `parse` stands.
+pub struct Parsed(Vec<tree::Tree>);
+
+/// See [`Parsed`].
+pub fn parse_trees(sql: &str) -> Result<Parsed, String> {
+    format::parse(sql, &python_stack(PARSE_ENTRY_FRAMES_311)).map(Parsed)
+}
+
+/// What `Parsed::to_python` needs from `sqlparse`: its `sql` classes by name, its token types by `str()`,
+/// and `object.__new__`.
+pub struct SqlObjects {
+    pub classes: std::collections::HashMap<String, pyo3::Py<pyo3::PyAny>>,
+    pub types: std::collections::HashMap<String, pyo3::Py<pyo3::PyAny>>,
+    pub new: pyo3::Py<pyo3::PyAny>,
+}
+
+impl Parsed {
+    /// The statements as sqlparse's own objects, as `sqlparse.parse` leaves them: each node made with
+    /// `object.__new__` and its slots set from the tree (`__init__` would recompute what grouping changed
+    /// since: a group's value joined at creation, `normalized` taken at creation, a token's parent).
+    pub fn to_python<'py>(
+        &self,
+        py: pyo3::Python<'py>,
+        sql: &SqlObjects,
+    ) -> pyo3::PyResult<Vec<pyo3::Bound<'py, pyo3::PyAny>>> {
+        self.0.iter().map(|t| tree_object(py, t, sql)).collect()
+    }
+}
+
+fn tree_object<'py>(
+    py: pyo3::Python<'py>,
+    t: &tree::Tree,
+    sql: &SqlObjects,
+) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
+    use pyo3::prelude::*;
+    use pyo3::types::{PyList, PyString};
+    use pyo3::{IntoPyObjectExt, intern};
+    let missing = |what: &str| pyo3::exceptions::PyKeyError::new_err(what.to_string());
+    // every node the statement reaches, through its tokens or a parent pointer, gets its object first
+    let mut objs: Vec<Option<Bound<'py, PyAny>>> = vec![None; t.n.len()];
+    let mut order = Vec::new();
+    let mut todo = vec![tree::ROOT];
+    while let Some(id) = todo.pop() {
+        if objs[id].is_some() {
+            continue;
+        }
+        let name = t.cls(id).name();
+        let cls = sql.classes.get(name).ok_or_else(|| missing(name))?;
+        objs[id] = Some(sql.new.bind(py).call1((cls.bind(py),))?);
+        order.push(id);
+        todo.extend(t.tokens(id).iter().rev());
+        if let Some(p) = t.n[id].parent {
+            todo.push(p);
+        }
+    }
+    // the lexer's and grouping's type names are a handful of static strings: by address first
+    let mut seen: Vec<(usize, Bound<'py, PyAny>)> = Vec::with_capacity(32);
+    let none = py.None().into_bound(py);
+    for &id in &order {
+        let node = &t.n[id];
+        let obj = objs[id].as_ref().expect("made above");
+        let value = t.value(id);
+        let py_value = PyString::new(py, value);
+        let ttype = match node.ttype {
+            None => none.clone(),
+            Some(tt) => {
+                let addr = tt.as_ptr() as usize;
+                match seen.iter().find(|(a, _)| *a == addr) {
+                    Some((_, o)) => o.clone(),
+                    None => {
+                        let o = sql
+                            .types
+                            .get(tt)
+                            .ok_or_else(|| missing(tt))?
+                            .bind(py)
+                            .clone();
+                        seen.push((addr, o.clone()));
+                        o
+                    }
+                }
+            }
+        };
+        let normalized = t.normalized(id);
+        let py_normalized = if normalized == value {
+            py_value.clone()
+        } else {
+            PyString::new(py, normalized)
+        };
+        let parent = match node.parent {
+            Some(p) => objs[p].clone().expect("reached above"),
+            None => none.clone(),
+        };
+        obj.setattr(intern!(py, "value"), py_value)?;
+        obj.setattr(intern!(py, "ttype"), ttype)?;
+        obj.setattr(intern!(py, "parent"), parent)?;
+        obj.setattr(intern!(py, "is_group"), t.is_group(id))?;
+        obj.setattr(intern!(py, "is_keyword"), node.is_keyword)?;
+        obj.setattr(intern!(py, "is_whitespace"), node.is_whitespace)?;
+        obj.setattr(intern!(py, "is_newline"), node.is_newline)?;
+        obj.setattr(intern!(py, "normalized"), py_normalized)?;
+        if t.is_group(id) {
+            let children = t
+                .tokens(id)
+                .iter()
+                .map(|&c| objs[c].clone().expect("reached above"));
+            obj.setattr(intern!(py, "tokens"), PyList::new(py, children)?)?;
+        }
+    }
+    objs[tree::ROOT]
+        .clone()
+        .expect("the root")
+        .into_bound_py_any(py)
+}
+
 /// One bit per code point: those the running Python's Unicode tables treat differently from the CPython 3.11
 /// tables the port was generated from (`python/sqlparse_rs/_unicode_drift.py`). Set once by the package.
 static DRIFT: std::sync::OnceLock<Vec<u64>> = std::sync::OnceLock::new();

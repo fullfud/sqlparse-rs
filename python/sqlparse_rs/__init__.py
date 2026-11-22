@@ -37,18 +37,20 @@ import unicodedata as _unicodedata
 
 import sqlparse
 from sqlparse import lexer as _lexer
+from sqlparse import sql as _sql
 from sqlparse import tokens as _tokens
 
 from . import _native
 from ._unicode_drift import DRIFT as _DRIFT
 from ._unicode_drift import PORTED_UNICODE as _PORTED_UNICODE
 
-__all__ = ['format', 'split', 'split_many', 'install', 'uninstall', 'PORTED_VERSION']
+__all__ = ['format', 'split', 'split_many', 'parse', 'install', 'uninstall', 'PORTED_VERSION']
 
 PORTED_VERSION = '0.6.1'
 
 _original_format = sqlparse.format
 _original_split = sqlparse.split
+_original_parse = sqlparse.parse
 _original_get_tokens = _lexer.Lexer.get_tokens
 _ported = sqlparse.__version__ == PORTED_VERSION
 
@@ -229,6 +231,23 @@ def _token_type(name):
 
 
 _native.set_token_types({name: _token_type(name) for name in _native.token_type_names()})
+_native.set_sql_objects(
+    {name: cls for name, cls in vars(_sql).items() if isinstance(cls, type) and issubclass(cls, _sql.Token)},
+    object.__new__,
+)
+
+
+def parse(sql, encoding=None):
+    """sqlparse.parse(): the statements in *sql*, grouped, as sqlparse's own objects (a tuple of
+    `sqlparse.sql.Statement`). Grouped in Rust and built node for node as sqlparse leaves them; in sqlparse
+    under the same conditions as format()."""
+    if _ported and type(sql) is str and _text_ported(sql) and _lexer_ported():
+        try:
+            # Called from this frame: the Rust counts it in place of sqlparse.parse's for the recursion limit.
+            return _native.parse(sql)
+        except UnicodeEncodeError:
+            pass
+    return _original_parse(sql, encoding)
 
 
 def _get_tokens(self, text, encoding=None):
@@ -253,6 +272,7 @@ def install():
         return False
     sqlparse.format = format
     sqlparse.split = split
+    sqlparse.parse = parse
     _lexer.Lexer.get_tokens = _get_tokens
     return True
 
@@ -261,4 +281,5 @@ def uninstall():
     """Put sqlparse's own format, split and lexer back."""
     sqlparse.format = _original_format
     sqlparse.split = _original_split
+    sqlparse.parse = _original_parse
     _lexer.Lexer.get_tokens = _original_get_tokens

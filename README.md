@@ -16,9 +16,10 @@ import sqlparse_rs
 sqlparse_rs.format(sql, reindent=True, keyword_case='upper')   # == sqlparse.format(sql, reindent=True, ...)
 sqlparse_rs.split(sql)                                          # == sqlparse.split(sql)
 sqlparse_rs.split_many(sqls)                                    # split() of each, on all CPU threads
+sqlparse_rs.parse(sql)                                          # == sqlparse.parse(sql): sqlparse's own objects
 
 sqlparse_rs.install()    # from now on sqlparse.format / sqlparse.split are the Rust ones, for every caller,
-                         # and sqlparse's lexer is too (sqlparse.parse gets faster)
+                         # and sqlparse.parse and sqlparse's lexer too
 ```
 
 ```sh
@@ -41,8 +42,14 @@ The whole benchmark corpus (440 files, 2.1 MB of SQL: generated queries and scri
 | `format(sql, reindent=True, indent_columns=True, comma_first=True)` | 12.86 s | 0.408 s | **32x** |
 
 `split_many` over the 400 query files takes 0.003 s against sqlparse's 1.07 s (12 threads), and with
-`install()` sqlparse's `lexer.tokenize` is 20x faster and `sqlparse.parse` 1.3x (the rest of parse is
-sqlparse's Python grouping, which the Rust only runs inside `format`).
+`install()` sqlparse's `lexer.tokenize` is 20x faster.
+
+`parse(sql)` over the 400 query files: sqlparse 3.1 s, sqlparse_rs 0.30-0.48 s (**6-10x**); with Python's
+cyclic garbage collector off, 2.8 s against 0.145 s (**19x**). The statements are grouped in Rust and handed
+back as sqlparse's own `Statement`, `Identifier`, ... objects, made with `object.__new__` and their slots set
+from the Rust tree, so a group's value joined when the group was made, `normalized` taken at creation and
+every `parent` pointer are sqlparse's. A tree is a reference cycle (`parent` and `tokens`), so freeing one
+waits for the garbage collector, in sqlparse as here: that collection is most of what is left.
 
 ### Against markocerkez/sqlparse-rs
 
@@ -59,7 +66,7 @@ and leaves grouping and the filters, so `format`, in Python. Both packages on th
 | `format(reindent=True, keyword_case='upper')` (3.13) | 3.8 s | 3.1 s | **0.134 s** |
 | `split_many`, all files (3.13) | 1.31 s | 0.004 s | 0.004 s |
 | `lexer.tokenize`, each file (3.13) | 0.72 s | 0.034 s | 0.032 s |
-| `parse`, each file (3.13) | 3.1 s | 2.36 s | 2.30 s |
+| `parse`, each file (3.13) | 3.1 s | 2.36 s | **0.18 s** (0.3-0.6 s as the garbage collector runs) |
 | `split`, each file (CPython 3.11) | 1.00 s | 0.77 s | **0.010 s** |
 | `format(reindent=True, keyword_case='upper')` (3.11) | 3.7 s | 3.4 s | **0.13 s** |
 
@@ -144,9 +151,10 @@ follows the Python it runs on, so a text holding such a code point goes to sqlpa
 Unicode 13, 4,489 / 5,116 / 10,304 for 15.0 / 15.1 / 16.0). On a Unicode version not in the list, only ASCII text
 runs in Rust. The list goes to the Rust once, as one bit per code point, and a text is checked in one pass.
 
-`sqlparse.parse()` is not replaced: it returns sqlparse's Python token tree, which callers walk and change, so
-it has to stay Python objects. The Rust builds the same tree (checked node by node above) but uses it only
-inside `format()`.
+`sqlparse_rs.parse(sql, encoding=None)` returns what `sqlparse.parse` returns: a tuple of sqlparse's own
+`Statement` objects, node for node, for callers to walk and change; `install()` puts it in place of
+`sqlparse.parse` (`parsestream`, a generator, stays sqlparse's). It runs in Rust under the same conditions as
+`format()`, and raises sqlparse's `SQLParseError` at the same nesting depth.
 
 ## How it is proven
 

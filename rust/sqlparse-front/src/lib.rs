@@ -285,6 +285,46 @@ fn lex<'py>(py: Python<'py>, text: String) -> PyResult<Bound<'py, pyo3::types::P
     pyo3::types::PyList::new(py, items)
 }
 
+/// What `parse` builds sqlparse's objects from, handed over once by the package.
+static SQL_OBJECTS: std::sync::OnceLock<port::SqlObjects> = std::sync::OnceLock::new();
+
+/// `set_sql_objects`: `sqlparse.sql`'s classes by name and `object.__new__` (the token types come from
+/// `set_token_types`, which must be called first).
+#[pyfunction]
+#[pyo3(name = "set_sql_objects", signature = (classes, new))]
+fn set_sql_objects(
+    classes: std::collections::HashMap<String, Py<PyAny>>,
+    new: Py<PyAny>,
+) -> PyResult<()> {
+    let types = TOKEN_TYPES.get().ok_or_else(|| {
+        pyo3::exceptions::PyRuntimeError::new_err("set_sql_objects: call set_token_types first")
+    })?;
+    let types = Python::attach(|py| {
+        types
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone_ref(py)))
+            .collect()
+    });
+    let _ = SQL_OBJECTS.set(port::SqlObjects {
+        classes,
+        types,
+        new,
+    });
+    Ok(())
+}
+
+/// `parse`: `sqlparse.parse(sql)`, grouped in Rust, as a tuple of sqlparse's own `Statement` objects.
+#[pyfunction]
+#[pyo3(name = "parse", signature = (sql))]
+fn parse<'py>(py: Python<'py>, sql: String) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
+    let objects = SQL_OBJECTS.get().ok_or_else(|| {
+        pyo3::exceptions::PyRuntimeError::new_err("parse: set_sql_objects was not called")
+    })?;
+    let parsed = port::parse_trees(&sql).map_err(error)?;
+    let statements = parsed.to_python(py, objects);
+    pyo3::types::PyTuple::new(py, statements?)
+}
+
 /// `set_drift`: not in the front door; the package's Unicode-version guard (see `port::set_drift`).
 #[pyfunction]
 #[pyo3(name = "set_drift", signature = (ranges))]
@@ -311,6 +351,8 @@ fn native_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(token_type_names, m)?)?;
     m.add_function(wrap_pyfunction!(set_token_types, m)?)?;
     m.add_function(wrap_pyfunction!(lex, m)?)?;
+    m.add_function(wrap_pyfunction!(set_sql_objects, m)?)?;
+    m.add_function(wrap_pyfunction!(parse, m)?)?;
     m.add_function(wrap_pyfunction!(drifted, m)?)?;
     Ok(())
 }

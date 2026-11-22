@@ -12,8 +12,10 @@ the whole check once).
 3. A changed default lexer goes to sqlparse; put back with default_initialization(), calls go to Rust again.
 4. Every non-ASCII code point inside SQL text through the case options: the ones this Python's Unicode tables
    treat as CPython 3.11 does run in Rust (many to a call), the others (_unicode_drift.py) go to sqlparse.
-5. The Rust lexer install() gives sqlparse: lexer.tokenize and parse() (every node: class, token type object,
-   value) on the corpus, sqlparse's test files and random scripts, against sqlparse's own lexer.
+5. The Rust lexer install() gives sqlparse, and sqlparse_rs.parse: lexer.tokenize and parse() (every node:
+   class, token type object, value, normalized, the is_* flags, which object its parent is) on the corpus,
+   sqlparse's test files and random scripts, against sqlparse's own; parse() outside what was ported goes to
+   sqlparse.
 6. split_many against split, Rust and fallback texts mixed.
 
 Exits 1 on any mismatch, so CI fails on it.
@@ -31,8 +33,9 @@ from sqlparse.lexer import Lexer
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NATIVE = {sqlparse_rs._native.format: 'format', sqlparse_rs._native.split: 'split',
-          sqlparse_rs._native.lex: 'lex', sqlparse_rs._native.split_many: 'split_many'}
-counts = {'format': 0, 'split': 0, 'lex': 0, 'split_many': 0}
+          sqlparse_rs._native.lex: 'lex', sqlparse_rs._native.split_many: 'split_many',
+          sqlparse_rs._native.parse: 'parse'}
+counts = {'format': 0, 'split': 0, 'lex': 0, 'split_many': 0, 'parse': 0}
 
 
 def hook(frame, event, arg):
@@ -347,11 +350,20 @@ def installed():
     print('install/uninstall: done')
 
 
-def tree(node):
-    """parse()'s tree as plain data: class, token type (the object itself), value, children."""
+def tree(node, holder=None):
+    """parse()'s tree as plain data: every slot of every node (the token type as the object itself), and its
+    parent: the group holding it, None, or another node (named by class and value)."""
+    if node.parent is holder:
+        parent = 'holder'
+    elif node.parent is None:
+        parent = None
+    else:
+        parent = ('other', type(node.parent).__name__, node.parent.value)
+    slots = (type(node).__name__, node.ttype, node.value, node.normalized, node.is_group, node.is_keyword,
+             node.is_whitespace, node.is_newline, parent)
     if node.is_group:
-        return (type(node).__name__, node.value, [tree(t) for t in node.tokens])
-    return (type(node).__name__, node.ttype, node.value)
+        return slots + ([tree(t, node) for t in node.tokens],)
+    return slots
 
 
 def lexer_same(what, text):
@@ -363,17 +375,20 @@ def lexer_same(what, text):
     ta = plain(lambda: [tree(s) for s in sqlparse.parse(text)])
     sqlparse_rs.install()
     rearm()
-    before = counts['lex']
+    before = counts['lex'], counts['parse']
     b = outcome(lambda: [(tt, v) for tt, v in lexer.tokenize(text)])
     tb = outcome(lambda: [tree(s) for s in sqlparse.parse(text)])
-    ran = counts['lex'] - before
+    ran = (counts['lex'] - before[0], counts['parse'] - before[1])
     sqlparse_rs.uninstall()
+    if tb[0] == 'ok' and ta[0] == 'ok' and type(sqlparse_rs.parse(text)) is not type(sqlparse.parse(text)):
+        print('PARSE RETURNS ANOTHER TYPE', what)
+        bad += 1
     same(what, a, b)
     same(what + ' parse', ta, tb)
     if a == b and a[0] == 'ok' and any(x[0] is not y[0] for x, y in zip(a[1], b[1])):
         print('OTHER TOKEN TYPE OBJECTS', what)
         bad += 1
-    return 1 if ran == 2 else 0
+    return 1 if ran == (1, 1) else 0
 
 
 def lexer_swap():
@@ -406,8 +421,21 @@ def lexer_swap():
     lx = Lexer.get_default_instance()
     lx.add_keywords({'FOO': tokens.Keyword})
     list(lexer.tokenize(sql))
+    changed = [tree(s) for s in sqlparse.parse(sql)]
     lx.default_initialization()
     leaked = counts['lex'] - before
+    for args in ((sql.encode(),), (Sub(sql),), (sql.encode('utf-16'), 'utf-16'), ('select \ud800',)):
+        before = counts['parse']
+        a = plain(lambda: [tree(s) for s in sqlparse_rs._original_parse(*args)])
+        same(f'parse fallback {args!r}', a, outcome(lambda: [tree(s) for s in sqlparse.parse(*args)]))
+        # a lone surrogate may reach the Rust, which cannot take it as UTF-8 and hands it to sqlparse
+        if args[0] != 'select \ud800':
+            leaked += counts['parse'] - before
+    lx.add_keywords({'FOO': tokens.Keyword})
+    before = counts['parse']
+    same('parse with a changed lexer', ('ok', changed), outcome(lambda: [tree(s) for s in sqlparse.parse(sql)]))
+    leaked += counts['parse'] - before
+    lx.default_initialization()
     sqlparse_rs.uninstall()
     if leaked or lexed != len(texts):
         print(f'LEXER SWAP: {lexed} of {len(texts)} texts lexed in Rust, {leaked} calls that should not have been')

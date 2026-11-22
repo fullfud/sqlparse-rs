@@ -1,7 +1,7 @@
 """Where Python's recursion limit stops sqlparse, original against the Rust port.
 
     python -X utf8 tools/check_recursion.py            # the front door against the bindings
-    python -X utf8 tools/check_recursion.py package    # sqlparse.format against sqlparse_rs.format
+    python -X utf8 tools/check_recursion.py package    # sqlparse.format and parse against sqlparse_rs.format and parse
 
 sqlparse bounds its own grouping depth at 100, but `@recurse` passes over ~990 nested BEGIN blocks and the
 indent filters' `_next_token` over long BETWEEN chains only stop at the interpreter's recursion limit, which
@@ -50,6 +50,8 @@ if PACKAGE:
 
 def py_call(fn, opts):
     if PACKAGE:
+        if fn == 'parse':
+            return sqlparse.parse
         return lambda t: sqlparse.format(t, **opts)
     if fn == 'parse':
         return py.parse_tree
@@ -58,6 +60,8 @@ def py_call(fn, opts):
 
 def rs_call(fn, opts):
     if PACKAGE:
+        if fn == 'parse':
+            return sqlparse_rs.parse
         return lambda t: sqlparse_rs.format(t, **opts)
     if fn == 'parse':
         return rs.parse_tree
@@ -96,8 +100,6 @@ def threshold(f, shape, lo=1):
 def main():
     bad = 0
     for name, fn, opts, shape in SHAPES:
-        if PACKAGE and fn == 'parse':  # the package has no parse(): sqlparse's tree is Python objects
-            continue
         p, r = py_call(fn, opts), rs_call(fn, opts)
         n = threshold(p, shape)
         line = [f'{name}: python fails from {n}']
