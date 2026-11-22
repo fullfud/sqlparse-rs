@@ -160,7 +160,13 @@ fn exact_base() -> Option<usize> {
         let code = c"def probe():\n    n = 0\n    def down():\n        nonlocal n\n        n += 1\n        down()\n    try:\n        down()\n    except RecursionError:\n        pass\n    return n\n";
         let scope = pyo3::types::PyDict::new(py);
         py.run(code, Some(&scope), None).ok()?;
-        let fits: usize = scope.get_item("probe").ok()??.call0().ok()?.extract().ok()?;
+        let fits: usize = scope
+            .get_item("probe")
+            .ok()??
+            .call0()
+            .ok()?
+            .extract()
+            .ok()?;
         let limit: usize = py
             .import("sys")
             .ok()?

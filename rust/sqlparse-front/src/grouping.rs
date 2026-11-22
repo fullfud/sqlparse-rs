@@ -31,7 +31,8 @@ const WHERE_CLOSE: [&str; 10] = [
     "INTO",
 ];
 
-pub(crate) const RECURSION_ERROR: &str = "SQLParseError: Maximum recursion depth exceeded";
+pub(crate) const RECURSION_ERROR: &str =
+    "sqlparse.exceptions.SQLParseError: Maximum recursion depth exceeded";
 
 /// Python's recursion limit as it applies to one call of the front door.
 ///
@@ -92,10 +93,14 @@ impl Stack {
 
 fn check_limits(t: &Tree, l: Id, depth: usize) -> Result<(), String> {
     if depth > 100 {
-        return Err("SQLParseError: Maximum grouping depth exceeded (100).".into());
+        return Err(
+            "sqlparse.exceptions.SQLParseError: Maximum grouping depth exceeded (100).".into(),
+        );
     }
     if t.tokens(l).len() > 10000 {
-        return Err("SQLParseError: Maximum number of tokens exceeded (10000).".into());
+        return Err(
+            "sqlparse.exceptions.SQLParseError: Maximum number of tokens exceeded (10000).".into(),
+        );
     }
     Ok(())
 }

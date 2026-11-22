@@ -48,8 +48,7 @@ Baseline, sqlparse 0.6.1 on CPython 3.11, the 2.1 MB benchmark corpus (`bench/wo
 | `parse` | 10.3 s |
 
 Recording: 7842 cases (format 5427, split 1123, tokenize 666, parse_tree 626; 327 of them errors the
-original raises). `rust-anything diff`: **7838/7842 match**; the other 4 raise the same message under another
-exception class (see Known differences).
+original raises). `rust-anything diff`: **7842/7842 match**, errors with sqlparse's own `SQLParseError` class.
 
 All of it, same corpus, through the bridge (best of 1; `cargo run --release --example bench_format` for Rust
 alone):
@@ -115,9 +114,9 @@ Checks besides the recording: `tools/check_tree.py` (every corpus and sqlparse t
 
 ### Known differences
 
-- **Exception class.** sqlparse raises `sqlparse.exceptions.SQLParseError`; the generated bridge can only raise
-  built-in exceptions, so the port raises `ValueError('SQLParseError: <same message>')`. rust-anything compares
-  classes, so these cases count as mismatches. The package (step 4) re-raises sqlparse's class.
+- **Exception class** (needs rust-anything with dotted exception kinds, branch `feat/python-custom-exceptions`
+  of the fork, not released yet). The port returns `Err("sqlparse.exceptions.SQLParseError: ...")` and the
+  bindings raise sqlparse's own class. With a rust-anything that lacks it, the same message comes as ValueError.
 - **`None` for a bool option.** sqlparse treats `format(sql, reindent=None)` as False; the bindings take a
   bool and raise TypeError. Outside the declared types; the package passes such calls to sqlparse.
 - The recursion limit is modelled for CPython 3.11, where it was measured.

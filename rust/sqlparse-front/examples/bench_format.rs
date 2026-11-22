@@ -4,6 +4,7 @@ mod filters;
 #[path = "../src/format.rs"]
 mod format;
 #[path = "../src/grouping.rs"]
+#[allow(dead_code)] // Stack::python is for calls from Python
 mod grouping;
 #[path = "../src/lexer_tables.rs"]
 #[allow(dead_code)]
@@ -61,9 +62,28 @@ fn main() {
     let stack = grouping::Stack::unlimited();
     let sets: Vec<(&str, format::Options)> = vec![
         ("parse", options()),
-        ("reindent+upper", format::Options { reindent: true, keyword_case: Some("upper".into()), ..options() }),
-        ("strip_comments", format::Options { strip_comments: true, ..options() }),
-        ("reindent_aligned", format::Options { reindent_aligned: true, ..options() }),
+        (
+            "reindent+upper",
+            format::Options {
+                reindent: true,
+                keyword_case: Some("upper".into()),
+                ..options()
+            },
+        ),
+        (
+            "strip_comments",
+            format::Options {
+                strip_comments: true,
+                ..options()
+            },
+        ),
+        (
+            "reindent_aligned",
+            format::Options {
+                reindent_aligned: true,
+                ..options()
+            },
+        ),
     ];
     for (name, o) in &sets {
         let mut best = f64::MAX;
@@ -71,9 +91,15 @@ fn main() {
         for _ in 0..3 {
             let t = std::time::Instant::now();
             n = if *name == "parse" {
-                files.iter().map(|f| format::parse(f, &stack).expect("parse").len()).sum::<usize>()
+                files
+                    .iter()
+                    .map(|f| format::parse(f, &stack).expect("parse").len())
+                    .sum::<usize>()
             } else {
-                files.iter().map(|f| format::format(f, o, &stack).expect("format").len()).sum::<usize>()
+                files
+                    .iter()
+                    .map(|f| format::format(f, o, &stack).expect("format").len())
+                    .sum::<usize>()
             };
             best = best.min(t.elapsed().as_secs_f64());
         }

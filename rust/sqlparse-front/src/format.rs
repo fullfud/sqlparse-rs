@@ -30,7 +30,7 @@ pub(crate) struct Options {
 }
 
 fn sqlparse_error(msg: String) -> String {
-    format!("SQLParseError: {msg}")
+    format!("sqlparse.exceptions.SQLParseError: {msg}")
 }
 
 #[derive(Clone, Copy)]

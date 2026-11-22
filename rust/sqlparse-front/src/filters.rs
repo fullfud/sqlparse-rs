@@ -601,14 +601,7 @@ impl<'s> Reindent<'s> {
                 t.insert_before(l, tidx, nl);
                 tidx += 1;
             }
-            cur = next_split(
-                t,
-                l,
-                tidx as isize,
-                &REINDENT_SPLIT,
-                self.stack,
-                frames + 1,
-            )?;
+            cur = next_split(t, l, tidx as isize, &REINDENT_SPLIT, self.stack, frames + 1)?;
         }
         Ok(())
     }
