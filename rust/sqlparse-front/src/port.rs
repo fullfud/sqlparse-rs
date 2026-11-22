@@ -7,10 +7,18 @@
 
 #![forbid(unsafe_code)]
 
+#[path = "lexer.rs"]
+mod lexer;
+#[path = "lexer_tables.rs"]
+#[rustfmt::skip]
+mod lexer_tables;
+
 /// Port of `tokenize` (`front/sqlparse_front.py:13`).
 pub fn tokenize(sql: String) -> Result<Vec<serde_json::Value>, String> {
-    let _ = &sql;
-    unimplemented!("port `tokenize` from front/sqlparse_front.py")
+    Ok(lexer::tokenize(&sql)
+        .into_iter()
+        .map(|(ttype, value)| serde_json::json!({"$tuple": [ttype, value]}))
+        .collect())
 }
 
 /// Port of `split` (`front/sqlparse_front.py:18`).

@@ -27,7 +27,7 @@ Port in the order data flows through sqlparse, each step proven before the next:
 
 | Step | Front-door function | sqlparse code | State |
 | --- | --- | --- | --- |
-| 1 | `tokenize` | `tokens.py`, `keywords.py`, `lexer.py` (the regex lexer and keyword tables) | in progress |
+| 1 | `tokenize` | `tokens.py`, `keywords.py`, `lexer.py` (the regex lexer and keyword tables) | **done**: 666/666 recorded, 0 of 32,986 checked texts differ, 15x faster |
 | 2 | `split` | `engine/statement_splitter.py` | |
 | 3 | `format` | `engine/grouping.py`, `sql.py` (the token tree), `filters/*`, `formatter.py` | |
 | 4 | package | a wheel whose `format`/`split` use Rust and fall back to sqlparse for anything not ported | |
@@ -47,6 +47,29 @@ Baseline, sqlparse 0.6.1 on CPython 3.11, the 2.1 MB benchmark corpus (`bench/wo
 | `parse` | 10.3 s |
 
 Recording: 7216 cases (format 5427, split 1123, tokenize 666; 327 of them errors the original raises).
+
+Lexer (step 1), same corpus, best of 3:
+
+| | Python | Rust |
+| --- | ---: | ---: |
+| `tokenize`, Rust alone (`cargo run --release --example bench_lexer`) | 2.86 s | **0.19 s (15x)** |
+| `tokenize` through the bridge (800k tuples back to Python) | 2.86 s | 0.95 s (3x) |
+
+`format()` and `split()` return one string, so they will not pay the bridge's per-token cost.
+
+### How the lexer matches Python's `re`
+
+Python 3.11 and Rust disagree on `\w`, `\s`, `\d`, `` and case-insensitive letters outside ASCII (Unicode 14
+against a newer table, combining marks, numerics like `½`, `ſ` and the Kelvin sign). `tools/gen_lexer.py`
+writes `src/lexer_tables.rs` from sqlparse itself: every character class in `SQL_REGEX` becomes the exact set
+of code points Python's `re` matches, asked code point by code point; patterns run on fancy-regex so
+lookahead and backtracking behave as in `re` (`123abc` lexes as `12` + `3abc` in both); one-character
+lookbehinds are checked on the character before the match, which `re.match(text, pos)` also sees. Each rule
+also gets the set of characters a match can start with, from Python's own parse of the pattern, so a
+position only tries the rules that can match there.
+
+`tools/check_tokenize.py` compares both on every recorded text, three random cuts of each (unclosed strings,
+comments, dollar quotes) and 30,000 random texts built from the pieces where the engines part.
 
 ## Run it
 
