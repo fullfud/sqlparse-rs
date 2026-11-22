@@ -1,0 +1,199 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "D:\\Projects\\sqlparse-rs",
+  "unit": "front/sqlparse_front.py",
+  "language": "python",
+  "kind": "pyo3",
+  "crate_name": "sqlparse-front",
+  "exports": [
+    {
+      "name": "tokenize",
+      "file": "front/sqlparse_front.py",
+      "line": 13,
+      "params": [
+        {
+          "name": "sql",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "tuple[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "split",
+      "file": "front/sqlparse_front.py",
+      "line": 18,
+      "params": [
+        {
+          "name": "sql",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "strip_semicolon",
+          "ts_type": "boolean",
+          "optional": true,
+          "rest": false,
+          "default": "False"
+        }
+      ],
+      "returns": "string[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "format",
+      "file": "front/sqlparse_front.py",
+      "line": 23,
+      "params": [
+        {
+          "name": "sql",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "keyword_case",
+          "ts_type": "string | undefined",
+          "optional": true,
+          "rest": false,
+          "default": "None"
+        },
+        {
+          "name": "identifier_case",
+          "ts_type": "string | undefined",
+          "optional": true,
+          "rest": false,
+          "default": "None"
+        },
+        {
+          "name": "strip_comments",
+          "ts_type": "boolean",
+          "optional": true,
+          "rest": false,
+          "default": "False"
+        },
+        {
+          "name": "use_space_around_operators",
+          "ts_type": "boolean",
+          "optional": true,
+          "rest": false,
+          "default": "False"
+        },
+        {
+          "name": "strip_whitespace",
+          "ts_type": "boolean",
+          "optional": true,
+          "rest": false,
+          "default": "False"
+        },
+        {
+          "name": "truncate_strings",
+          "ts_type": "int | undefined",
+          "optional": true,
+          "rest": false,
+          "default": "None"
+        },
+        {
+          "name": "truncate_char",
+          "ts_type": "string",
+          "optional": true,
+          "rest": false,
+          "default": "'[...]'"
+        },
+        {
+          "name": "reindent",
+          "ts_type": "boolean",
+          "optional": true,
+          "rest": false,
+          "default": "False"
+        },
+        {
+          "name": "reindent_aligned",
+          "ts_type": "boolean",
+          "optional": true,
+          "rest": false,
+          "default": "False"
+        },
+        {
+          "name": "indent_columns",
+          "ts_type": "boolean",
+          "optional": true,
+          "rest": false,
+          "default": "False"
+        },
+        {
+          "name": "indent_after_first",
+          "ts_type": "boolean",
+          "optional": true,
+          "rest": false,
+          "default": "False"
+        },
+        {
+          "name": "indent_tabs",
+          "ts_type": "boolean",
+          "optional": true,
+          "rest": false,
+          "default": "False"
+        },
+        {
+          "name": "indent_width",
+          "ts_type": "int",
+          "optional": true,
+          "rest": false,
+          "default": "2"
+        },
+        {
+          "name": "wrap_after",
+          "ts_type": "int",
+          "optional": true,
+          "rest": false,
+          "default": "0"
+        },
+        {
+          "name": "comma_first",
+          "ts_type": "boolean",
+          "optional": true,
+          "rest": false,
+          "default": "False"
+        },
+        {
+          "name": "compact",
+          "ts_type": "boolean",
+          "optional": true,
+          "rest": false,
+          "default": "False"
+        },
+        {
+          "name": "right_margin",
+          "ts_type": "int | undefined",
+          "optional": true,
+          "rest": false,
+          "default": "None"
+        },
+        {
+          "name": "output_format",
+          "ts_type": "string | undefined",
+          "optional": true,
+          "rest": false,
+          "default": "None"
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    }
+  ],
+  "classes": [],
+  "js_only": []
+}
