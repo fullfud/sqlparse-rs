@@ -8,6 +8,29 @@ depends on it, and people complain that it is slow, sometimes quadratically so. 
 same output: sqloxide and sqlformat-rs parse SQL differently. This project closes that gap. It is a drop-in
 `format()` and `split()` that runs much faster and returns what sqlparse returns.
 
+## Use it
+
+```sh
+pip install .            # from a checkout (needs Rust); builds the wheel with maturin, pulls sqlparse==0.6.1
+```
+
+```python
+import sqlparse_rs
+
+sqlparse_rs.format(sql, reindent=True, keyword_case='upper')   # sqlparse.format's signature and result
+sqlparse_rs.split(sql)                                          # sqlparse.split's
+
+sqlparse_rs.install()     # sqlparse.format / sqlparse.split are now these, for every caller that looks them up
+                          # on the module (Django's sqlmigrate and the like); uninstall() puts them back
+```
+
+A call runs in Rust only when it is inside what was proven: the installed sqlparse is 0.6.1, `sql` is a `str`
+with no `encoding`, sqlparse's default lexer is unchanged, and every option has exactly the type the port
+takes (`True`/`False`, not `1` or `None`; `int`, not `4.0`; `indent_width` at most 4096). Anything else goes to
+sqlparse itself, unchanged, so the answer is always sqlparse's. Errors are sqlparse's too: an invalid option or
+a statement nested past Python's recursion limit raises `sqlparse.exceptions.SQLParseError` with sqlparse's
+message, at the same nesting depth. The rules are in `python/sqlparse_rs/__init__.py`.
+
 ## How it works
 
 The Rust is checked with [rust-anything](https://github.com/erkamyaman/rust-anything):
@@ -31,7 +54,7 @@ Port in the order data flows through sqlparse, each step proven before the next:
 | 1 | `tokenize` | `tokens.py`, `keywords.py`, `lexer.py` (the regex lexer and keyword tables) | **done**: 666/666 recorded, 0 of 32,986 checked texts differ, 15x faster |
 | 2 | `split` | `engine/statement_splitter.py` | **done**: 1123/1123 recorded, 0 of 10 million checked texts differ, 12x faster |
 | 3 | `format`, `parse_tree` | `engine/grouping.py`, `sql.py` (the token tree), `filters/*`, `formatter.py` | **done**: every recorded tree and format result matches (see below), 17-22x faster |
-| 4 | package | a wheel whose `format`/`split` use Rust and fall back to sqlparse for anything not ported | |
+| 4 | package | `sqlparse_rs`: `format`/`split` in Rust, sqlparse for anything outside what was proven | **done**: sqlparse's own 537 tests pass with it installed, 6,090 corpus calls same as sqlparse, 13-20x faster |
 
 Where the time went in sqlparse (`docs/profile-format.md`): grouping 58 %, lexing and splitting 27 %, the
 reindent filters 9 %. `parse()` returns sqlparse's Python token tree to callers, so it stays in Python;
@@ -70,6 +93,16 @@ Lexer (step 1), same corpus, best of 3:
 | `tokenize` through the bridge (800k tuples back to Python) | 2.86 s | 0.95 s (3x) |
 
 `format()` and `split()` return one string, so they do not pay the bridge's per-token cost.
+
+The package (`sqlparse_rs.format`/`split` against `sqlparse.format`/`split`, the corpus's 400 statement files,
+0.58 MB, best of 1):
+
+| Call | sqlparse | sqlparse_rs |
+| --- | ---: | ---: |
+| `split` | 0.98 s | **0.07 s (13x)** |
+| `format(keyword_case='upper')` | 1.05 s | **0.07 s (15x)** |
+| `format(reindent=True, keyword_case='upper')` | 3.66 s | **0.20 s (19x)** |
+| `format(strip_comments=True)` | 3.09 s | **0.15 s (20x)** |
 
 ### How the lexer matches Python's `re`
 
@@ -112,6 +145,15 @@ Checks besides the recording: `tools/check_tree.py` (every corpus and sqlparse t
 `tools/check_format_flat.py` (26.7 million case-filter texts over every code point, 0 differ),
 `rust-anything fuzz` (161,856 fresh cases: only the known differences).
 
+The package: `tools/run_upstream_package.py` runs sqlparse's own test suite with `sqlparse_rs.install()` (537
+passed, the same 2 xfail and 1 xpass as sqlparse alone; 157 format and 9 split calls ran in Rust).
+`tools/check_package.py` compares the public calls: the corpus through 13 option sets and split (6,090 calls,
+all in Rust, 0 differ), 21 calls outside the proven types (bytes, `encoding`, `reindent=None` or `1`, a `str`
+subclass, lone surrogates, an unknown option, huge widths: all answered by sqlparse, same result), a changed
+default lexer (`add_keywords`, `set_SQL_REGEX`: sqlparse; after `default_initialization()`: Rust again), and
+install/uninstall. `tools/check_recursion.py package` finds the recursion threshold through the package: one
+frame later than through the front door, as in sqlparse, 0 mismatches.
+
 ### Known differences
 
 - **Exception class** (needs rust-anything with dotted exception kinds, branch `feat/python-custom-exceptions`
@@ -120,6 +162,13 @@ Checks besides the recording: `tools/check_tree.py` (every corpus and sqlparse t
 - **`None` for a bool option.** sqlparse treats `format(sql, reindent=None)` as False; the bindings take a
   bool and raise TypeError. Outside the declared types; the package passes such calls to sqlparse.
 - The recursion limit is modelled for CPython 3.11, where it was measured.
+- **Out of memory.** sqlparse raises MemoryError; Rust cannot catch a failed allocation and stops the process.
+  The indent string, the one thing that grows with an option rather than with the input, is allocated as
+  Python does it (OverflowError past `sys.maxsize`, MemoryError when it cannot be had), but a later copy of a
+  gigabyte-sized result can still fail. Only a huge `indent_width` makes a small statement that big, so the
+  package gives `indent_width` above 4096 to sqlparse.
+- **A call the package hands to sqlparse** has the package's frame on the stack as well, so sqlparse's own
+  recursion limit comes one nesting level sooner than when called directly.
 
 ## Run it
 
@@ -134,6 +183,13 @@ rust-anything record rust/sqlparse-front --inputs rust/sqlparse-front/inputs.jso
 rust-anything build rust/sqlparse-front
 rust-anything diff rust/sqlparse-front
 rust-anything gate rust/sqlparse-front
+
+# the package, into the venv:
+.venv/Scripts/python -m pip install maturin && VIRTUAL_ENV=.venv maturin develop --release
+.venv/Scripts/python -X utf8 tools/run_upstream_package.py
+.venv/Scripts/python -X utf8 tools/check_package.py
+.venv/Scripts/python -X utf8 tools/check_recursion.py package
+maturin build --release --out dist && maturin sdist --out dist     # wheel and sdist
 ```
 
 ## License

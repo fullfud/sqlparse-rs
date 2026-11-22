@@ -1,6 +1,7 @@
 """Where Python's recursion limit stops sqlparse, original against the Rust port.
 
-    python -X utf8 tools/check_recursion.py
+    python -X utf8 tools/check_recursion.py            # the front door against the bindings
+    python -X utf8 tools/check_recursion.py package    # sqlparse.format against sqlparse_rs.format
 
 sqlparse bounds its own grouping depth at 100, but `@recurse` passes over ~990 nested BEGIN blocks and the
 indent filters' `_next_token` over long BETWEEN chains only stop at the interpreter's recursion limit, which
@@ -41,13 +42,22 @@ def via_c(extra, f, text):
     return outcome(f, text)
 
 
+PACKAGE = sys.argv[1:] == ['package']
+if PACKAGE:
+    import sqlparse, sqlparse_rs
+
+
 def py_call(fn, opts):
+    if PACKAGE:
+        return lambda t: sqlparse.format(t, **opts)
     if fn == 'parse':
         return py.parse_tree
     return lambda t: py.format(t, **opts)
 
 
 def rs_call(fn, opts):
+    if PACKAGE:
+        return lambda t: sqlparse_rs.format(t, **opts)
     if fn == 'parse':
         return rs.parse_tree
     return lambda t: rs.format(t, *[opts.get(n, d) for n, d in zip(NAMES, DEFAULTS)])
@@ -85,6 +95,8 @@ def threshold(f, shape, lo=1):
 def main():
     bad = 0
     for name, fn, opts, shape in SHAPES:
+        if PACKAGE and fn == 'parse':  # the package has no parse(): sqlparse's tree is Python objects
+            continue
         p, r = py_call(fn, opts), rs_call(fn, opts)
         n = threshold(p, shape)
         line = [f'{name}: python fails from {n}']

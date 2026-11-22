@@ -1,6 +1,23 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
 [project]
 name = "sqlparse-rs"
-version = "0.0.0"
-description = "sqlparse rewritten in Rust, proven against the original with rust-anything"
+version = "0.1.0"
+description = "sqlparse's format() and split() rewritten in Rust, proven against the original with rust-anything"
+readme = "README.md"
+license = "BSD-3-Clause"
 requires-python = ">=3.10"
 dependencies = ["sqlparse==0.6.1"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: Database",
+]
+
+[tool.maturin]
+manifest-path = "rust/sqlparse-front/Cargo.toml"
+python-source = "python"
+module-name = "sqlparse_rs._native"
+include = [{ path = "LICENSE", format = "sdist" }]

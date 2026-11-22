@@ -46,8 +46,9 @@ pub(crate) struct Stack {
     base: usize,
     /// `sys.getrecursionlimit()`.
     limit: usize,
-    /// The exact `base`, measured by asking Python.
+    /// The exact `base`, measured by asking Python; `shift` is taken off what it returns.
     probe: Option<fn() -> Option<usize>>,
+    shift: usize,
     exact: Cell<Option<usize>>,
 }
 
@@ -61,15 +62,24 @@ impl Stack {
             base: 0,
             limit: usize::MAX,
             probe: None,
+            shift: 0,
             exact: Cell::new(None),
         }
     }
 
-    pub(crate) fn python(base: usize, limit: usize, probe: fn() -> Option<usize>) -> Stack {
+    /// `frames` is the Python stack as counted from here, `shift` how many of those frames sqlparse's own
+    /// call would not have (see `port::python_stack`).
+    pub(crate) fn python(
+        frames: usize,
+        shift: usize,
+        limit: usize,
+        probe: fn() -> Option<usize>,
+    ) -> Stack {
         Stack {
-            base,
+            base: frames.saturating_sub(shift),
             limit,
             probe: Some(probe),
+            shift,
             exact: Cell::new(None),
         }
     }
@@ -82,7 +92,10 @@ impl Stack {
         let base = match self.exact.get() {
             Some(b) => b,
             None => {
-                let b = self.probe.and_then(|p| p()).unwrap_or(self.base);
+                let b = self
+                    .probe
+                    .and_then(|p| p())
+                    .map_or(self.base, |b| b.saturating_sub(self.shift));
                 self.exact.set(Some(b));
                 b
             }

@@ -9,3 +9,5 @@ rust/*/diff.txt
 rust/*/diff.json
 rust/*/diff.err
 rust/*/python/*/_native.tmp-*
+dist/
+python/sqlparse_rs/_native*

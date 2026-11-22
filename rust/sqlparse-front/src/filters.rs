@@ -476,15 +476,27 @@ fn str_len(t: &Tree, id: Id) -> i128 {
     pystr::len(&t.to_str(id)) as i128
 }
 
-/// `char * n` for the indent character (a negative count gives '').
-fn repeat(ch: char, n: i128) -> Result<String, String> {
+/// `prefix + char * n` for the indent character, as Python does it: a negative count gives no indent, a
+/// count past `sys.maxsize` is an OverflowError, and memory that cannot be had is a MemoryError (never an
+/// abort). One allocation, so the indent is never copied.
+fn repeat(prefix: &str, ch: char, n: i128) -> Result<String, String> {
     if n <= 0 {
-        return Ok(String::new());
+        return Ok(prefix.to_string());
     }
-    if n > 1 << 40 {
-        return Err("MemoryError: ".into());
+    if n > isize::MAX as i128 {
+        return Err("OverflowError: cannot fit 'int' into an index-sized integer".into());
     }
-    Ok(std::iter::repeat_n(ch, n as usize).collect())
+    let n = n as usize;
+    let bytes = n
+        .checked_mul(ch.len_utf8())
+        .and_then(|b| b.checked_add(prefix.len()))
+        .ok_or_else(|| String::from("MemoryError: "))?;
+    let mut s = String::new();
+    s.try_reserve_exact(bytes)
+        .map_err(|_| String::from("MemoryError: "))?;
+    s.push_str(prefix);
+    s.extend(std::iter::repeat_n(ch, n));
+    Ok(s)
 }
 
 // ---------------------------------------------------------------- ReindentFilter
@@ -581,7 +593,7 @@ impl<'s> Reindent<'s> {
     }
 
     fn nl(&self, t: &mut Tree, offset: i128) -> Result<Id, String> {
-        let v = format!("\n{}", repeat(self.ch, self.leading_ws() + offset)?);
+        let v = repeat("\n", self.ch, self.leading_ws() + offset)?;
         Ok(t.new_token(tt::WHITESPACE, v))
     }
 
@@ -916,10 +928,7 @@ impl<'s> Aligned<'s> {
 
     fn nl(&self, t: &mut Tree, offset: i128) -> Result<Id, String> {
         let indent = self.indent * (2 + MAX_KWD_LEN);
-        let v = format!(
-            "\n{}",
-            repeat(self.ch, MAX_KWD_LEN + offset + indent + self.offset)?
-        );
+        let v = repeat("\n", self.ch, MAX_KWD_LEN + offset + indent + self.offset)?;
         Ok(t.new_token(tt::WHITESPACE, v))
     }
 
@@ -1014,7 +1023,7 @@ impl<'s> Aligned<'s> {
                 t.insert_before(l, idx, nl);
             }
             if let Some(c) = cond {
-                let ws = t.new_token(tt::WHITESPACE, repeat(self.ch, max_width - widths[i])?);
+                let ws = t.new_token(tt::WHITESPACE, repeat("", self.ch, max_width - widths[i])?);
                 let idx = t.token_index(l, c[c.len() - 1])?;
                 t.insert_after(l, idx, ws, true);
             }

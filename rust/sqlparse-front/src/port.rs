@@ -127,14 +127,31 @@ pub fn format(
     )
 }
 
-/// Where Python's recursion limit stands for a call of the front door made from here: the frames on the
-/// stack (the caller's and below) plus the front door's own, and `sys.getrecursionlimit()`.
+/// The Python package's module (`package/python/sqlparse_rs`). Its `format` stands where `sqlparse.format`
+/// stands, so a call from it has one frame on the stack that sqlparse counts in the entry point.
+const PACKAGE: &str = "sqlparse_rs";
+
+/// Where Python's recursion limit stands for this call: the frames on the stack, and
+/// `sys.getrecursionlimit()`. Called from `front/sqlparse_front.py`'s place, the front door's frame is
+/// added (the original has it, the bindings do not). Called from the package, whose frame replaces
+/// `sqlparse.format`'s (already counted in the entry point), there is neither, so two frames come off.
 fn python_stack() -> grouping::Stack {
     use pyo3::prelude::*;
     pyo3::Python::attach(|py| -> Option<grouping::Stack> {
         let sys = py.import("sys").ok()?;
         let limit: usize = sys.call_method0("getrecursionlimit").ok()?.extract().ok()?;
         let mut frame = sys.call_method1("_getframe", (0,)).ok()?;
+        let caller: Option<String> = frame
+            .getattr("f_globals")
+            .ok()?
+            .get_item("__name__")
+            .ok()
+            .and_then(|n| n.extract().ok());
+        let shift = if caller.as_deref() == Some(PACKAGE) {
+            2
+        } else {
+            0
+        };
         let mut depth = 1;
         loop {
             let back = frame.getattr("f_back").ok()?;
@@ -144,7 +161,7 @@ fn python_stack() -> grouping::Stack {
             depth += 1;
             frame = back;
         }
-        Some(grouping::Stack::python(depth + 1, limit, exact_base))
+        Some(grouping::Stack::python(depth + 1, shift, limit, exact_base))
     })
     .unwrap_or_else(grouping::Stack::unlimited)
 }
