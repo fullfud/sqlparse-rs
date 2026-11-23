@@ -132,6 +132,10 @@ jobs:
         run: python -X utf8 tools/run_upstream_package.py
       - name: Recursion limit
         run: python -X utf8 tools/check_recursion.py package
+      - name: Django app
+        run: |
+          python -m pip install django
+          python -X utf8 tools/check_django.py
       - name: Package against sqlparse (quick)
         if: matrix.os != 'ubuntu-latest'
         run: python -X utf8 tools/check_package.py --quick
@@ -167,6 +171,8 @@ jobs:
           python -m pip install --no-index --find-links dist --no-deps sqlparse-turbo
           python bench/gen_corpus.py
           python -X utf8 tools/check_other_sqlparse.py
+          python -m pip install django
+          python -X utf8 tools/check_django.py
 
   publish:
     name: Upload to PyPI
