@@ -17,8 +17,14 @@ faster.</b></p>
 </p>
 
 ```sh
-pip install sqlparse-turbo
+pip install sqlparse-turbo "sqlparse==0.6.1"
 ```
+
+> [!IMPORTANT]
+> **The speed-up needs sqlparse 0.6.1**, sqlparse's current release. The Rust is a port of that version and runs
+> only with it. With any other sqlparse the package still installs and every answer is still right, but every
+> call simply goes to sqlparse at sqlparse's own speed: `install()` returns False, `sqlparse_turbo.ACTIVE` is
+> False, and importing the package warns about it.
 
 sqlparse is the pure-Python SQL splitter and formatter that Django depends on (every SQL script a migration
 runs goes through `sqlparse.split` and `sqlparse.format`, and the test runner formats debug SQL with it), along
@@ -140,8 +146,19 @@ Unicode versions (see Unicode versions below).
 ## Install
 
 ```sh
-pip install sqlparse-turbo         # installs sqlparse_turbo and the sqlformat-turbo command, and sqlparse if missing
+pip install sqlparse-turbo "sqlparse==0.6.1"   # sqlparse_turbo, the sqlformat-turbo command, and sqlparse 0.6.1
 ```
+
+Only sqlparse 0.6.1 gets the Rust. The package does not require that version (requiring it would stop a project
+pinned to another sqlparse from installing it at all), so pip keeps whatever sqlparse a project already has. On
+another version everything works as plain sqlparse, no faster, and the import warns:
+
+```
+RuntimeWarning: sqlparse_turbo runs in Rust only with sqlparse 0.6.1; sqlparse 0.5.3 is installed, so every call
+goes to sqlparse at its own speed (pip install "sqlparse==0.6.1")
+```
+
+`sqlparse_turbo.ACTIVE` tells which it is.
 
 Wheels are built for Linux x86_64 and aarch64, Windows x64 and macOS (arm64 and Intel), one abi3 wheel each for
 every CPython from 3.10 on. Elsewhere pip builds from the source distribution, which needs a Rust toolchain.

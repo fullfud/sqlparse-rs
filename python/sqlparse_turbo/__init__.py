@@ -61,7 +61,7 @@ from . import _native
 from ._unicode_drift import DRIFT as _DRIFT
 from ._unicode_drift import PORTED_UNICODE as _PORTED_UNICODE
 
-__all__ = ['format', 'split', 'split_many', 'parse', 'install', 'uninstall', 'PORTED_VERSION']
+__all__ = ['format', 'split', 'split_many', 'parse', 'install', 'uninstall', 'PORTED_VERSION', 'ACTIVE']
 
 PORTED_VERSION = '0.6.1'
 
@@ -71,6 +71,18 @@ _original_parse = sqlparse.parse
 _original_get_tokens = _lexer.Lexer.get_tokens
 _original_run = sqlparse.engine.filter_stack.FilterStack.run
 _ported = sqlparse.__version__ == PORTED_VERSION
+# Whether the Rust runs at all: only with the sqlparse version it was ported from. Otherwise every call is
+# sqlparse's own, at its own speed.
+ACTIVE = _ported
+if not _ported:
+    import warnings as _warnings
+
+    _warnings.warn(
+        f'sqlparse_turbo runs in Rust only with sqlparse {PORTED_VERSION}; sqlparse {sqlparse.__version__} is '
+        f'installed, so every call goes to sqlparse at its own speed (pip install "sqlparse=={PORTED_VERSION}")',
+        RuntimeWarning,
+        stacklevel=2,
+    )
 
 
 

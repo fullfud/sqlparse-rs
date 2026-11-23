@@ -7,9 +7,13 @@ sqlparse itself (same results, same errors), with nothing reaching the Rust.
 import glob
 import os
 import sys
+import warnings
 
 import sqlparse
-import sqlparse_turbo
+
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter('always')
+    import sqlparse_turbo
 from sqlparse_turbo import _native
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -57,6 +61,10 @@ for text in texts:
             bad += 1
 if sqlparse_turbo.split_many(texts) != [sqlparse.split(t) for t in texts]:
     print('MISMATCH split_many')
+    bad += 1
+if sqlparse_turbo.ACTIVE or not any(issubclass(w.category, RuntimeWarning) and 'only with sqlparse' in str(w.message)
+                                    for w in caught):
+    print('no warning at import, or ACTIVE is True')
     bad += 1
 if sqlparse_turbo.install() is not False or sqlparse.format is sqlparse_turbo.format:
     print('install() did not refuse')
