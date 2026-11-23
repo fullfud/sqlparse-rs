@@ -85,6 +85,7 @@ Unicode versions (see Unicode versions below).
 | Package against sqlparse (`tools/check_package.py`): corpus x 13 option sets, split, CLI, bad option types, lexer changes | **6,090 calls in Rust, 0 differ**; 18 out-of-range calls all answered by sqlparse |
 | The Rust lexer under `install()`: `lexer.tokenize` and every node of `parse()` (class, token type object, value) on the corpus, sqlparse's test files and 3,000 random scripts; `split_many` against `split` | **3,460 texts, 0 differ**, all lexed in Rust; others (another Lexer, a changed one, bytes, streams) left to sqlparse |
 | Lexer and splitter over every Unicode code point (`tools/check_codepoints.py`, `tools/check_split.py`) | **12.2 million and 10.0 million texts, 0 differ** |
+| Patched sqlparse (`check_package.py patches`): 6 kinds of patch x format, split, parse; recursion error chain | every patched call answered by sqlparse with the patch, back in Rust once put back; `SQLParseError` from a `RecursionError` as in sqlparse |
 | Package over every non-ASCII code point (`check_package.py unicode`), on each CPython 3.10-3.14 | the code points that behave as in 3.11 run in Rust, 0 differ; the drifted ones (see Unicode versions) go to sqlparse |
 | Fresh random cases (`rust-anything fuzz --time 600`) | **282,550 / 282,556**; the 6 pass `None` where the front door types `str`/`bool` (a known difference of the test bindings, see below) |
 | Python's recursion limit (`tools/check_recursion.py`): 11 deep-nesting shapes, 3 caller depths, through C calls | **fails at exactly the same size** on CPython 3.10, 3.11, 3.12, 3.13, 3.14 |
@@ -138,8 +139,16 @@ unchanged, so the answer is always sqlparse's:
 | `indent_width` up to 4096 | a larger `indent_width` (see Limits) |
 | text whose characters this Python's Unicode tables treat as CPython 3.11's do (all ASCII text, nearly all other) | text holding a code point that changed since Unicode 14 on this Python (see below) |
 | keywords sqlparse never reads (`filename`, `outfile`, ... as the CLI passes them) are dropped, as sqlparse ignores them | |
+| sqlparse's code as installed (Rust again once a change is put back) | a replaced, wrapped, added or deleted function, method, class or constant in sqlparse's modules (grouping, filters, `sql`, `tokens`, keywords, lexer, ...) |
 
 The rules are in [`python/sqlparse_rs/__init__.py`](python/sqlparse_rs/__init__.py).
+
+**Patched sqlparse.** A program that monkeypatches sqlparse (`grouping.group_identifier = ...`, a new method
+on `Identifier`, `MAX_GROUPING_TOKENS = 5`) gets its patch: the package remembers every name in sqlparse's
+modules and classes at import and sends calls to sqlparse while one of them differs. On CPython 3.12+ Python
+tells the package when one of those dicts changes (a dict watcher), so the comparison runs once after a change
+and a call pays well under a microsecond for it; on 3.10 and 3.11 it runs on every call, about 7 µs (a
+`format("select 1")` takes ~10 µs there against ~3 µs on 3.13).
 
 **Unicode versions.** The Rust's character tables (`\w`, `\d`, case mapping, `isprintable`, line breaks, final
 sigma) are taken from CPython 3.11, which has Unicode 14. Other CPythons ship other Unicode versions: 3.10 has

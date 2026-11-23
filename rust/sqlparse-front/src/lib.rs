@@ -325,6 +325,53 @@ fn parse<'py>(py: Python<'py>, sql: String) -> PyResult<Bound<'py, pyo3::types::
     pyo3::types::PyTuple::new(py, statements?)
 }
 
+/// One watched namespace: a module's `__dict__` or a class's own dict, whether it must keep its size (a class:
+/// a new attribute may override an inherited one; a module gains a name when a submodule is first imported),
+/// and its entries in order as the package found them: the key, the objects allowed as the value (None: any),
+/// and whether an equal value of the same type will do (a number or string put back as a new object).
+type WatchEntry = (Py<PyAny>, Option<Vec<Py<PyAny>>>, bool);
+type Watched = (Py<pyo3::types::PyDict>, bool, Vec<WatchEntry>);
+
+static WATCH: std::sync::OnceLock<Vec<Watched>> = std::sync::OnceLock::new();
+
+/// `set_watch`: sqlparse's namespaces as the package found them.
+#[pyfunction]
+#[pyo3(name = "set_watch", signature = (watch))]
+fn set_watch(watch: Vec<Watched>) {
+    let _ = WATCH.set(watch);
+}
+
+/// `untouched`: whether sqlparse's namespaces still hold what they held: the same keys in the same order with
+/// allowed values (a replaced, removed or re-added name shows), a class nothing more. One pass over each dict.
+#[pyfunction]
+#[pyo3(name = "untouched")]
+fn untouched(py: Python<'_>) -> bool {
+    use pyo3::types::PyDictMethods;
+    let Some(watch) = WATCH.get() else {
+        return false;
+    };
+    watch.iter().all(|(dict, fixed_size, entries)| {
+        let d = dict.bind(py);
+        let len = d.len();
+        if len < entries.len() || (*fixed_size && len != entries.len()) {
+            return false;
+        }
+        d.iter()
+            .zip(entries)
+            .all(|((k, v), (key, allowed, by_value))| {
+                k.as_ptr() == key.as_ptr()
+                    && allowed.as_ref().is_none_or(|a| {
+                        a.iter().any(|x| x.as_ptr() == v.as_ptr())
+                            || (*by_value
+                                && a.iter().any(|x| {
+                                    let x = x.bind(py);
+                                    x.get_type().is(v.get_type()) && x.eq(&v).unwrap_or(false)
+                                }))
+                    })
+            })
+    })
+}
+
 /// `set_drift`: not in the front door; the package's Unicode-version guard (see `port::set_drift`).
 #[pyfunction]
 #[pyo3(name = "set_drift", signature = (ranges))]
@@ -353,6 +400,8 @@ fn native_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(lex, m)?)?;
     m.add_function(wrap_pyfunction!(set_sql_objects, m)?)?;
     m.add_function(wrap_pyfunction!(parse, m)?)?;
+    m.add_function(wrap_pyfunction!(set_watch, m)?)?;
+    m.add_function(wrap_pyfunction!(untouched, m)?)?;
     m.add_function(wrap_pyfunction!(drifted, m)?)?;
     Ok(())
 }

@@ -1,7 +1,8 @@
 """The package against sqlparse, through the public calls: sqlparse.format/split against sqlparse_rs.format/split.
 
     python -X utf8 tools/check_package.py [--quick] [part ...]     parts: corpus fallbacks inert lexer installed
-                                                                  cli unicode lexswap many (default: all)
+                                                                  cli unicode lexswap many patches
+                                                                  (default: all)
 
 --quick takes every 8th corpus file and every 8th chunk of code points (CI runs it on every OS x Python and
 the whole check once).
@@ -17,6 +18,9 @@ the whole check once).
    sqlparse's test files and random scripts, against sqlparse's own; parse() outside what was ported goes to
    sqlparse.
 6. split_many against split, Rust and fallback texts mixed.
+7. sqlparse patched (a grouping function, a filter, a method, an added method, a constant): every call goes to
+   sqlparse and gives its answer, the patch included; put back, calls run in Rust again. Nesting past the
+   recursion limit raises SQLParseError from a RecursionError, as sqlparse does.
 
 Exits 1 on any mismatch, so CI fails on it.
 """
@@ -463,8 +467,81 @@ def many():
     print(f'split_many: {len(mixed)} texts x 2, same as split')
 
 
+def patches():
+    import sqlparse.engine.grouping as grouping
+    import sqlparse.filters.reindent as reindent
+    sql = 'select a, b as c from t where x = 1 and y in (select 2) order by a; select f(x) from u'
+    calls = [
+        ('format', lambda m: m.format(sql, reindent=True, keyword_case='upper')),
+        ('split', lambda m: m.split(sql)),
+        ('parse', lambda m: [tree(s) for s in m.parse(sql)]),
+    ]
+    orig_identifier = grouping.group_identifier
+    orig_next = sqlparse.sql.TokenList.token_next
+    orig_nl = reindent.ReindentFilter.nl
+
+    def wrapped_identifier(tlist):
+        return orig_identifier(tlist)
+
+    def no_identifiers(tlist):
+        return None
+
+    changes = [
+        ('grouping function replaced', lambda: setattr(grouping, 'group_identifier', no_identifiers),
+         lambda: setattr(grouping, 'group_identifier', orig_identifier)),
+        ('grouping function wrapped', lambda: setattr(grouping, 'group_identifier', wrapped_identifier),
+         lambda: setattr(grouping, 'group_identifier', orig_identifier)),
+        ('method replaced', lambda: setattr(sqlparse.sql.TokenList, 'token_next',
+                                            lambda self, idx, skip_ws=True, skip_cm=False, _reverse=False:
+                                            orig_next(self, idx, False, skip_cm, _reverse)),
+         lambda: setattr(sqlparse.sql.TokenList, 'token_next', orig_next)),
+        ('method added', lambda: setattr(sqlparse.sql.Identifier, 'get_alias', lambda self: None),
+         lambda: delattr(sqlparse.sql.Identifier, 'get_alias')),
+        ('filter method replaced', lambda: setattr(reindent.ReindentFilter, 'nl',
+                                                   lambda self, offset=0: sqlparse.sql.Token(tokens.Newline, '\n')),
+         lambda: setattr(reindent.ReindentFilter, 'nl', orig_nl)),
+        ('constant changed', lambda: setattr(grouping, 'MAX_GROUPING_TOKENS', 5),
+         lambda: setattr(grouping, 'MAX_GROUPING_TOKENS', int('10000'))),
+    ]
+    for name, change, undo in changes:
+        change()
+        try:
+            for what, call in calls:
+                expect = plain(lambda: call(sqlparse))
+                before = sum(counts.values())
+                got = outcome(lambda: call(sqlparse_rs))
+                ran = sum(counts.values()) - before
+                same(f'patched ({name}) {what}', expect, got)
+                if ran:
+                    print(f'PATCHED ({name}) {what} REACHED RUST')
+                    bad_add()
+        finally:
+            undo()
+        for what, call in calls:
+            before = sum(counts.values())
+            same(f'put back ({name}) {what}', plain(lambda: call(sqlparse)), outcome(lambda: call(sqlparse_rs)))
+            if sum(counts.values()) - before == 0:
+                print(f'PUT BACK ({name}) {what} NOT IN RUST')
+                bad_add()
+    deep = 'BEGIN ' * 1500 + 'END ' * 1500
+    for what, a, b in (('parse', sqlparse.parse, sqlparse_rs.parse),
+                       ('format', lambda t: sqlparse.format(t, reindent=True),
+                        lambda t: sqlparse_rs.format(t, reindent=True))):
+        errs = []
+        for f in (a, b):
+            try:
+                f(deep)
+                errs.append(None)
+            except Exception as e:
+                errs.append((type(e), e.args, type(e.__cause__), e.__cause__ and e.__cause__.args,
+                             e.__suppress_context__, e.__context__ is e.__cause__))
+        same(f'recursion error chain ({what})', ('ok', errs[0]), ('ok', errs[1]))
+    print(f'patches: {len(changes)} kinds of patch x {len(calls)} calls, answered by sqlparse; put back, Rust')
+
+
 PARTS = {'corpus': corpus, 'fallbacks': fallbacks, 'inert': inert_arguments, 'lexer': lexer_changes,
-         'installed': installed, 'cli': cli, 'unicode': unicode_sweep, 'lexswap': lexer_swap, 'many': many}
+         'installed': installed, 'cli': cli, 'unicode': unicode_sweep, 'lexswap': lexer_swap, 'many': many,
+         'patches': patches}
 args = sys.argv[1:]
 QUICK = '--quick' in args
 chosen = [a for a in args if a != '--quick'] or list(PARTS)

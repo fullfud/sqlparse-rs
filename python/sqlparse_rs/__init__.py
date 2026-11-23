@@ -18,7 +18,9 @@ the original sqlparse, unchanged, unless all of this holds:
 - the installed sqlparse is 0.6.1;
 - `sql` is a `str` (not bytes, not a stream, not a subclass); `encoding` is then not used, as in sqlparse,
   which only decodes bytes with it;
-- sqlparse's default lexer is as sqlparse sets it up (no add_keywords, set_SQL_REGEX, clear);
+- sqlparse's default lexer is as sqlparse sets it up (no add_keywords, set_SQL_REGEX, clear), and nothing in
+  sqlparse's modules or classes was replaced, added or removed since this package was imported (a patched
+  grouping function, filter or method goes to sqlparse, which uses it);
 - every format() option has exactly the type the port takes: bool options are `bool` (not 0/1 or None),
   `indent_width`/`wrap_after` are `int` (not bool) and `truncate_strings`/`right_margin` `int` or None, within
   64 bits (`indent_width` at most 4096, see _INDENT_WIDTH_MAX), `keyword_case`/`identifier_case`/`output_format`
@@ -30,14 +32,27 @@ the original sqlparse, unchanged, unless all of this holds:
   not listed there, only ASCII text does.
 
 Errors are sqlparse's own: an invalid option value raises `sqlparse.exceptions.SQLParseError` with sqlparse's
-message, and so does a statement nested past Python's recursion limit, at the same depth as in sqlparse.
+message, and so does a statement nested past Python's recursion limit, at the same depth as in sqlparse and,
+as there, raised from a RecursionError.
 """
 
 import unicodedata as _unicodedata
 
 import sqlparse
+import sqlparse.engine.filter_stack
+import sqlparse.engine.grouping
+import sqlparse.engine.statement_splitter
+import sqlparse.filters.aligned_indent
+import sqlparse.filters.others
+import sqlparse.filters.output
+import sqlparse.filters.reindent
+import sqlparse.filters.right_margin
+import sqlparse.filters.tokens
+import sqlparse.formatter
+import sqlparse.utils
 from sqlparse import lexer as _lexer
 from sqlparse import sql as _sql
+from sqlparse.exceptions import SQLParseError as _SQLParseError
 from sqlparse import tokens as _tokens
 
 from . import _native
@@ -176,15 +191,33 @@ def _lexer_ported():
     return True
 
 
+_RECURSION = 'Maximum recursion depth exceeded'
+
+
+def _raise_recursion():
+    """sqlparse's FilterStack turns a RecursionError into this, `from` it: the same chain here."""
+    try:
+        raise RecursionError('maximum recursion depth exceeded')
+    except RecursionError as err:
+        raise _SQLParseError(_RECURSION) from err
+
+
 def format(sql, encoding=None, **options):
     """sqlparse.format(): *sql* formatted according to *options* (see sqlparse's documentation)."""
     ported = _ported_options(options) if _ported and type(sql) is str else None
-    if ported is not None and _text_ported(sql) and _lexer_ported():
+    if ported is not None and _text_ported(sql) and _sqlparse_untouched():
+        too_deep = False
         try:
             # Called from this frame: the Rust counts it in place of sqlparse.format's for the recursion limit.
             return _native.format(sql, **ported)
         except UnicodeEncodeError:
             pass
+        except _SQLParseError as err:
+            if err.args != (_RECURSION,):
+                raise
+            too_deep = True
+        if too_deep:
+            _raise_recursion()
     return _original_format(sql, encoding, **options)
 
 
@@ -195,7 +228,7 @@ def split(sql, encoding=None, strip_semicolon=False):
         and type(sql) is str
         and type(strip_semicolon) is bool
         and _text_ported(sql)
-        and _lexer_ported()
+        and _sqlparse_untouched()
     ):
         try:
             return _native.split(sql, strip_semicolon)
@@ -209,7 +242,7 @@ def split_many(sqls, encoding=None, strip_semicolon=False):
     threads at once (without Python's lock); the others go to sqlparse one by one."""
     sqls = list(sqls)
     out = [None] * len(sqls)
-    if _ported and type(strip_semicolon) is bool and _lexer_ported():
+    if _ported and type(strip_semicolon) is bool and _sqlparse_untouched():
         fast = [i for i, sql in enumerate(sqls) if type(sql) is str and _text_ported(sql)]
         if fast:
             try:
@@ -241,12 +274,19 @@ def parse(sql, encoding=None):
     """sqlparse.parse(): the statements in *sql*, grouped, as sqlparse's own objects (a tuple of
     `sqlparse.sql.Statement`). Grouped in Rust and built node for node as sqlparse leaves them; in sqlparse
     under the same conditions as format()."""
-    if _ported and type(sql) is str and _text_ported(sql) and _lexer_ported():
+    if _ported and type(sql) is str and _text_ported(sql) and _sqlparse_untouched():
+        too_deep = False
         try:
             # Called from this frame: the Rust counts it in place of sqlparse.parse's for the recursion limit.
             return _native.parse(sql)
         except UnicodeEncodeError:
             pass
+        except _SQLParseError as err:
+            if err.args != (_RECURSION,):
+                raise
+            too_deep = True
+        if too_deep:
+            _raise_recursion()
     return _original_parse(sql, encoding)
 
 
@@ -254,7 +294,8 @@ def _get_tokens(self, text, encoding=None):
     """sqlparse's Lexer.get_tokens, with install(): sqlparse's default lexer, as sqlparse sets it up, on a `str`
     the Rust takes, tokenizes in Rust; anything else (another Lexer, a changed one, bytes, a stream) goes to
     sqlparse's own. Same (token type, value) pairs, same token type objects."""
-    if self is _lexer.Lexer._default_instance and type(text) is str and _text_ported(text) and _lexer_ported():
+    if (self is _lexer.Lexer._default_instance and type(text) is str and _text_ported(text)
+            and _sqlparse_untouched()):
         try:
             tokens = _native.lex(text)
         except UnicodeEncodeError:
@@ -263,6 +304,115 @@ def _get_tokens(self, text, encoding=None):
             yield from tokens
             return
     yield from _original_get_tokens(self, text, encoding)
+
+
+# Everything of sqlparse the Rust reproduces: its modules' names and its classes' attributes, as imported. Where
+# install() puts the package's own function, that one is allowed as well.
+_WATCHED_MODULES = [
+    sqlparse, _sql, _tokens, sqlparse.keywords, _lexer, sqlparse.utils, sqlparse.formatter, sqlparse.engine,
+    sqlparse.engine.grouping, sqlparse.engine.filter_stack, sqlparse.engine.statement_splitter, sqlparse.filters,
+    sqlparse.filters.aligned_indent, sqlparse.filters.others, sqlparse.filters.output, sqlparse.filters.reindent,
+    sqlparse.filters.right_margin, sqlparse.filters.tokens,
+]
+_INSTALLED = {
+    (sqlparse, 'format'): format, (sqlparse, 'split'): split, (sqlparse, 'parse'): parse,
+    (_lexer.Lexer, 'get_tokens'): _get_tokens,
+}
+
+
+def _watch():
+    import gc
+
+    owners = list(_WATCHED_MODULES)
+    for module in _WATCHED_MODULES:
+        for value in list(vars(module).values()):
+            if isinstance(value, type) and value.__module__.startswith('sqlparse') and value not in owners:
+                owners.append(value)
+    watch = []
+    for owner in owners:
+        namespace = vars(owner)
+        if type(namespace) is not dict:  # a class's mappingproxy: the dict behind it
+            namespace = next(r for r in gc.get_referents(namespace) if type(r) is dict)
+        entries = []
+        for name, value in namespace.items():
+            if (owner, name) == (_lexer.Lexer, '_default_instance'):  # set on first use
+                allowed = None
+            elif (owner, name) in _INSTALLED:
+                allowed = [value, _INSTALLED[owner, name]]
+            else:
+                allowed = [value]
+            entries.append((name, allowed, type(value) in (int, float, str, bytes, bool, tuple, frozenset)))
+        watch.append((namespace, isinstance(owner, type), entries))
+    _native.set_watch(watch)
+    return [namespace for namespace, _, _ in watch]
+
+
+_watched_dicts = _watch()
+
+# Comparing every watched name costs a few microseconds a call. CPython 3.12+ can tell us instead when one of
+# these dicts changes (a dict watcher): the comparison then runs once after a change, not on every call. On
+# older Pythons, or when no watcher can be had, it runs on every call.
+_changed = [True]  # a change not yet compared; True until the first comparison
+
+
+def _add_watchers(dicts):
+    import sys
+
+    if sys.version_info < (3, 12) or sys.implementation.name != 'cpython':
+        return False
+    try:
+        import atexit
+        import ctypes
+
+        api = ctypes.pythonapi
+        callback_type = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p,
+                                         ctypes.c_void_p)
+        changed = _changed
+
+        def on_change(event, d, key, value):
+            changed[0] = True
+            return 0
+
+        callback = callback_type(on_change)
+        api.PyDict_AddWatcher.argtypes = [callback_type]
+        api.PyDict_AddWatcher.restype = ctypes.c_int
+        api.PyDict_Watch.argtypes = [ctypes.c_int, ctypes.py_object]
+        api.PyDict_Watch.restype = ctypes.c_int
+        api.PyDict_ClearWatcher.argtypes = [ctypes.c_int]
+        api.PyDict_ClearWatcher.restype = ctypes.c_int
+        watcher = api.PyDict_AddWatcher(callback)
+        if watcher < 0:  # all of the interpreter's watcher slots are taken
+            return False
+        for d in dicts:
+            if api.PyDict_Watch(watcher, d) < 0:
+                api.PyDict_ClearWatcher(watcher)
+                return False
+    except (AttributeError, OSError, ValueError, TypeError, ctypes.ArgumentError):
+        return False
+
+    def stop():
+        # before the interpreter tears modules down, which would call back into Python mid-shutdown
+        api.PyDict_ClearWatcher(watcher)
+        _changed[0] = True
+
+    atexit.register(stop)
+    _add_watchers.callback = callback  # the C function pointer lives as long as this object
+    return True
+
+
+_watching = _add_watchers(_watched_dicts)
+
+
+def _sqlparse_untouched():
+    """sqlparse as the Rust reproduces it: nothing replaced, and its default lexer as sqlparse sets it up."""
+    if not _watching:
+        return _native.untouched() and _lexer_ported()
+    if _changed[0]:
+        _changed[0] = False  # set again by a change that lands from here on
+        if not _native.untouched():
+            _changed[0] = True  # still different: compared again next call, in case it is put back
+            return False
+    return _lexer_ported()
 
 
 def install():
