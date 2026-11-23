@@ -52,7 +52,8 @@ jobs:
       matrix:
         include:
           - { name: linux-x86_64, runner: ubuntu-latest, target: x86_64, manylinux: "2014" }
-          - { name: linux-aarch64, runner: ubuntu-latest, target: aarch64, manylinux: "2014" }
+          # zig (clang) outside the container: the manylinux2014 aarch64 cross gcc is too old for mimalloc's flags
+          - { name: linux-aarch64, runner: ubuntu-latest, target: aarch64, manylinux: "2014", zig: true }
           - { name: windows-x64, runner: windows-latest, target: x64, manylinux: "" }
           - { name: macos-universal2, runner: macos-latest, target: universal2-apple-darwin, manylinux: "" }
     steps:
@@ -64,8 +65,9 @@ jobs:
         with:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux || 'auto' }}
+          container: ${{ matrix.zig && 'off' || '' }}
           rust-toolchain: stable
-          args: --release --out dist
+          args: --release --out dist ${{ matrix.zig && '--zig' || '' }}
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.name }}
