@@ -45,7 +45,8 @@ sql = "select a, b, count(*) from t join u on t.id = u.t_id where x in (1, 2) gr
 if connection.ops.prepare_sql_script(script) != [
         s for s in original_split(sqlparse_turbo._original_format(script, strip_comments=True)) if s]:
     bad.append('prepare_sql_script differs from sqlparse')
-if connection.ops.format_debug_sql(sql) != sqlparse_turbo._original_format(sql, reindent=True, keyword_case='upper'):
+if hasattr(connection.ops, 'format_debug_sql') and (  # Django 6.0+
+        connection.ops.format_debug_sql(sql) != sqlparse_turbo._original_format(sql, reindent=True, keyword_case='upper')):
     bad.append('format_debug_sql differs from sqlparse')
 with connection.cursor() as cursor:  # the statements split by the Rust run
     for statement in connection.ops.prepare_sql_script(script):
