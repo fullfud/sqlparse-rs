@@ -1,7 +1,20 @@
-# sqlparse-turbo
+<h1 align="center">sqlparse-turbo</h1>
 
-**[sqlparse](https://github.com/andialbrecht/sqlparse)'s `format()`, `split()` and `parse()`, rewritten in Rust:
-same output, byte for byte, 6-100 times faster.**
+<p align="center">
+  <a href="https://pypi.org/project/sqlparse-turbo/"><img src="https://img.shields.io/pypi/v/sqlparse-turbo?color=FF8A3D&label=PyPI" alt="PyPI version"></a>
+  <a href="https://pypi.org/project/sqlparse-turbo/"><img src="https://img.shields.io/pypi/pyversions/sqlparse-turbo" alt="Python versions"></a>
+  <a href="https://github.com/fullfud/sqlparse-turbo/actions/workflows/ci.yml"><img src="https://github.com/fullfud/sqlparse-turbo/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/Linux%20·%20macOS%20·%20Windows-wheels-2563EB" alt="Wheels for Linux, macOS and Windows">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSD--3--Clause-555" alt="BSD-3-Clause license"></a>
+</p>
+
+<p align="center"><b><a href="https://github.com/andialbrecht/sqlparse">sqlparse</a>'s <code>format()</code>,
+<code>split()</code> and <code>parse()</code>, rewritten in Rust:<br>same output, byte for byte, 17-113 times
+faster.</b></p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/fullfud/sqlparse-turbo/main/docs/assets/race.gif" alt="sqlparse.format(reindent=True, keyword_case='upper') over 400 SQL queries, each file at its measured time: sqlparse takes 3.68 s, sqlparse-turbo 0.12 s, and both give the same output (same sha256)." width="820">
+</p>
 
 ```sh
 pip install sqlparse-turbo
@@ -30,7 +43,34 @@ sqlparse_turbo.install()    # from now on sqlparse.format / sqlparse.split are t
 sqlformat-turbo -r -k upper query.sql      # sqlparse's own `sqlformat` command, formatting in Rust
 ```
 
+## Django
+
+Django and its tools call sqlparse themselves. One line at the top of `settings.py` gives all of them the Rust,
+with nothing else changed:
+
+```python
+import sqlparse_turbo
+sqlparse_turbo.install()
+```
+
+- **[django-debug-toolbar](https://github.com/django-commons/django-debug-toolbar)** formats every query of a
+  page for its SQL panel with its own sqlparse filter stack. With `install()` the statements come grouped from
+  the Rust and only the toolbar's own filters run in Python: the panel formats the 400 corpus queries
+  **4.2x faster** (4.92 s → 1.17 s), the HTML identical, and a page making 200 ORM queries loads **2x faster**
+  through the toolbar (0.60 s → 0.30 s, the rest being the queries themselves and the templates).
+  Measured with [`bench/django_toolbar.py`](bench/django_toolbar.py), Django 6.1, django-debug-toolbar 8.0,
+  Python 3.13.
+- **Migrations** with `RunSQL` scripts and `sqlmigrate` go through `sqlparse.split` and `sqlparse.format`.
+- **Tests**: the runner formats debug SQL with `sqlparse.format`.
+
 ## Results
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/fullfud/sqlparse-turbo/main/docs/assets/speed.svg" alt="Seconds for 400 SQL queries, one call per file, Python 3.13: split 0.93 s against 0.008 s (113x), format with keyword_case 0.99 s against 0.019 s (53x), format with reindent 3.68 s against 0.121 s (30x), parse 2.96 s against 0.175 s (17x)." width="760">
+</p>
+
+The chart and the animation above come from [`bench/race_times.py`](bench/race_times.py) (best of 3 per file,
+every result checked equal) and [`tools/make_visuals.py`](tools/make_visuals.py).
 
 The whole benchmark corpus (440 files, 2.1 MB of SQL: generated queries and scripts), sqlparse 0.6.1 against
 `sqlparse_turbo` through the same public calls, CPython 3.11, Windows 11, best of 3, every result checked equal
@@ -90,6 +130,8 @@ Unicode versions (see Unicode versions below).
 | The Rust lexer under `install()`: `lexer.tokenize` and every node of `parse()` (class, token type object, value) on the corpus, sqlparse's test files and 3,000 random scripts; `split_many` against `split` | **3,460 texts, 0 differ**, all lexed in Rust; others (another Lexer, a changed one, bytes, streams) left to sqlparse |
 | Lexer and splitter over every Unicode code point (`tools/check_codepoints.py`, `tools/check_split.py`) | **12.2 million and 10.0 million texts, 0 differ** |
 | Patched sqlparse (`check_package.py patches`): 6 kinds of patch x format, split, parse; recursion error chain | every patched call answered by sqlparse with the patch, back in Rust once put back; `SQLParseError` from a `RecursionError` as in sqlparse |
+| Callers' own filter stacks through `FilterStack.run` (`check_package.py stacks`; `check_recursion.py package`): grouping only, the indent filters, a filter of the caller's own, serializers | same trees and output as sqlparse's run, the recursion error from exactly the same size |
+| Other sqlparse versions (`check_other_sqlparse.py`, in CI with 0.4.4, 0.5.3, 0.6.0) | every call answered by that sqlparse, nothing reaches the Rust |
 | Package over every non-ASCII code point (`check_package.py unicode`), on each CPython 3.10-3.14 | the code points that behave as in 3.11 run in Rust, 0 differ; the drifted ones (see Unicode versions) go to sqlparse |
 | Fresh random cases (`rust-anything fuzz --time 600`) | **282,550 / 282,556**; the 6 pass `None` where the front door types `str`/`bool` (a known difference of the test bindings, see below) |
 | Python's recursion limit (`tools/check_recursion.py`): 11 deep-nesting shapes, 3 caller depths, through C calls | **fails at exactly the same size** on CPython 3.10, 3.11, 3.12, 3.13, 3.14 |
@@ -129,6 +171,11 @@ without changing a line. It also gives sqlparse's default lexer the Rust tokeniz
 sqlparse's own token type objects, and only for the default lexer as sqlparse sets it up and a `str` the Rust
 takes. A name bound before with `from sqlparse import format` keeps the original. `uninstall()` puts sqlparse's
 functions back. `install()` refuses (returns False) if the installed sqlparse is not 0.6.1.
+
+`install()` also replaces `FilterStack.run`, which callers use to run their own sqlparse filters
+(django-debug-toolbar's SQL panel): a stack with grouping on and no token-stream filters gets its statements
+grouped in Rust, as `parse()` makes them, and runs its own statement filters and serializers on them in Python.
+Any other stack runs as sqlparse's.
 
 `sqlformat-turbo` (or `python -m sqlparse_turbo`) is sqlparse's `sqlformat`, same arguments, output and exit codes.
 
@@ -272,6 +319,9 @@ whole statement for every line) are walked backwards to the last line break in t
   that big, so the package gives `indent_width` above 4096 to sqlparse.
 - **A call the package hands to sqlparse** has the package's frame on the stack as well, so sqlparse's own
   recursion limit comes one nesting level sooner than when called directly.
+- **`FilterStack.run` with `install()`** decides between the Rust and sqlparse's own run when it is called;
+  sqlparse's reads the stack's filters when the first statement is asked for, so a filter added to the stack
+  after `run()` was called but before iterating is not seen.
 - **The `RecursionError` behind the recursion `SQLParseError`** says `maximum recursion depth exceeded`. On
   CPython 3.10 sqlparse's says where Python hit the limit as well (`... in comparison`, `... in
   __instancecheck__`), which depends on the C call sqlparse was in; the `SQLParseError` itself is the same.

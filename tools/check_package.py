@@ -1,7 +1,7 @@
 """The package against sqlparse, through the public calls: sqlparse.format/split against sqlparse_turbo.format/split.
 
     python -X utf8 tools/check_package.py [--quick] [part ...]     parts: corpus fallbacks inert lexer installed
-                                                                  cli unicode lexswap many patches
+                                                                  cli unicode lexswap many patches stacks
                                                                   (default: all)
 
 --quick takes every 8th corpus file and every 8th chunk of code points (CI runs it on every OS x Python and
@@ -21,6 +21,9 @@ the whole check once).
 7. sqlparse patched (a grouping function, a filter, a method, an added method, a constant): every call goes to
    sqlparse and gives its answer, the patch included; put back, calls run in Rust again. Nesting past the
    recursion limit raises SQLParseError from a RecursionError, as sqlparse does.
+8. FilterStack.run (install() replaces it): stacks callers build themselves (grouping, the indent filters, a
+   filter of their own, serializers) against sqlparse's run, trees and output; stacks with token-stream filters
+   or without grouping stay sqlparse's.
 
 Exits 1 on any mismatch, so CI fails on it.
 """
@@ -543,9 +546,86 @@ def patches():
     print(f'patches: {len(changes)} kinds of patch x {len(calls)} calls, answered by sqlparse; put back, Rust')
 
 
+def stacks():
+    """FilterStack.run with install() (django-debug-toolbar builds its own stack): stacks with grouping on and no
+    token-stream filters get Rust-grouped statements and run their filters in Python; the others are sqlparse's
+    own run. Trees and output against sqlparse's run, and which of them reached the Rust."""
+    from sqlparse import filters
+    from sqlparse.engine import FilterStack
+    paths = sorted(glob.glob(os.path.join(ROOT, 'bench', 'corpus', '*.sql')))[::8 if QUICK else 1]
+    texts = [open(p, encoding='utf-8').read() for p in paths]
+    texts += ['', ' ', 'select 1;select 2; ;', "select 'unclosed", '/* c */ select a from b -- x',
+              'BEGIN ' * 120 + 'END ' * 120, 'select a ' + 'between ' * 60, 'sélect ñ from 表']
+
+    class Bold:  # a caller's own statement filter, as the toolbar's BoldKeywordFilter
+        def process(self, stmt):
+            idx = 0
+            while idx < len(stmt.tokens):
+                token = stmt.tokens[idx]
+                if token.is_keyword:
+                    stmt.insert_before(idx, sqlparse.sql.Token(tokens.Other, '<b>'))
+                    stmt.insert_after(idx + 1, sqlparse.sql.Token(tokens.Other, '</b>'))
+                    idx += 2
+                elif token.is_group:
+                    self.process(token)
+                idx += 1
+
+    def build(kind):
+        stack = FilterStack()
+        if kind != 'no grouping':
+            stack.enable_grouping()
+        if kind == 'aligned':
+            stack.stmtprocess.append(filters.AlignedIndentFilter(char='&nbsp;', n='<br/>'))
+            stack.stmtprocess.append(Bold())
+        elif kind == 'reindent':
+            stack.stmtprocess.append(filters.ReindentFilter())
+        elif kind == 'strip comments':
+            stack.stmtprocess.append(filters.StripCommentsFilter())
+        elif kind == 'preprocess':
+            stack.preprocess.append(filters.KeywordCaseFilter('upper'))
+        if kind != 'trees':
+            stack.postprocess.append(filters.SerializerUnicode())
+        return stack
+
+    def result(run, kind, text):
+        stack = build(kind)
+        if kind == 'trees':
+            return [tree(s) for s in run(stack, text)]
+        if kind == 'first':
+            return next(iter(run(stack, text)), None)
+        return ''.join(run(stack, text))
+
+    kinds = ['trees', 'aligned', 'reindent', 'strip comments', 'first', 'preprocess', 'no grouping']
+    grouped = 0
+    for text in texts:
+        for kind in kinds:
+            expect = plain(lambda: result(sqlparse_turbo._original_run, kind, text))
+            before = counts['parse']
+            got = outcome(lambda: result(sqlparse_turbo._run, kind, text))
+            ran = counts['parse'] - before
+            same(f'stack {kind} {text[:40]!r}', expect, got)
+            should = kind not in ('preprocess', 'no grouping') and sqlparse_turbo._text_ported(text)
+            if ran != (1 if should else 0):
+                print(f'STACK {kind} {text[:40]!r}: {ran} Rust parses, expected {int(should)}')
+                bad_add()
+            grouped += ran
+    gen = sqlparse_turbo._run(build('trees'), 'select 1')
+    if type(gen).__name__ != 'generator':
+        print('FilterStack.run replacement is not a generator')
+        bad_add()
+    sqlparse_turbo.install()
+    try:
+        if FilterStack.run is not sqlparse_turbo._run or not sqlparse_turbo._sqlparse_untouched():
+            print('install() did not put run in place, or the watch saw it as a change')
+            bad_add()
+    finally:
+        sqlparse_turbo.uninstall()
+    print(f'stacks: {len(texts)} texts x {len(kinds)} stacks, same as sqlparse run; {grouped} grouped in Rust')
+
+
 PARTS = {'corpus': corpus, 'fallbacks': fallbacks, 'inert': inert_arguments, 'lexer': lexer_changes,
          'installed': installed, 'cli': cli, 'unicode': unicode_sweep, 'lexswap': lexer_swap, 'many': many,
-         'patches': patches}
+         'patches': patches, 'stacks': stacks}
 args = sys.argv[1:]
 QUICK = '--quick' in args
 chosen = [a for a in args if a != '--quick'] or list(PARTS)

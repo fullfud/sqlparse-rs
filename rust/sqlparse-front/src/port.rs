@@ -42,10 +42,22 @@ pub fn token_type_names() -> Vec<&'static str> {
 /// The recursion limit is counted as for `sqlparse.parse` called where the package's `parse` stands.
 pub struct Parsed(Vec<tree::Tree>);
 
-/// See [`Parsed`].
-pub fn parse_trees(sql: &str) -> Result<Parsed, String> {
-    format::parse(sql, &python_stack(PARSE_ENTRY_FRAMES_311)).map(Parsed)
+/// See [`Parsed`]. With `run`, the recursion limit is counted as for sqlparse's `FilterStack.run` generator,
+/// whose frame the caller's stands in for (the package's replacement of it): no `parse` frame above it, and on
+/// up to 3.11 no `tuple()` C call either.
+pub fn parse_trees(sql: &str, run: bool) -> Result<Parsed, String> {
+    let stack = if run {
+        python_stack_from(PARSE_ENTRY_FRAMES_311, RUN_FRAMES_311, RUN_FRAMES_312)
+    } else {
+        python_stack(PARSE_ENTRY_FRAMES_311)
+    };
+    format::parse(sql, &stack).map(Parsed)
 }
+
+/// What `sqlparse.parse` has on the stack above `FilterStack.run`'s frame that a call from `run` itself has not,
+/// by version (the `tuple()` C call counts up to 3.11 only). Measured with tools/check_recursion.py package.
+const RUN_FRAMES_311: usize = 1;
+const RUN_FRAMES_312: usize = 1;
 
 /// What `Parsed::to_python` needs from `sqlparse`: its `sql` classes by name, its token types by `str()`,
 /// and `object.__new__`.
@@ -298,6 +310,16 @@ const PARSE_ENTRY_FRAMES_311: usize = 1;
 /// `sqlparse.format`'s (already counted in the entry point), there is neither, so two frames come off.
 /// `entry_frames_311` is FORMAT_ENTRY_FRAMES_311 or PARSE_ENTRY_FRAMES_311, for the entry point being run.
 fn python_stack(entry_frames_311: usize) -> grouping::Stack {
+    python_stack_from(entry_frames_311, 0, 0)
+}
+
+/// [`python_stack`], with `fewer_311` / `fewer_312` frames less above the caller than the entry point has (up to
+/// 3.11 / from 3.12).
+fn python_stack_from(
+    entry_frames_311: usize,
+    fewer_311: usize,
+    fewer_312: usize,
+) -> grouping::Stack {
     use pyo3::prelude::*;
     pyo3::Python::attach(|py| -> Option<grouping::Stack> {
         let sys = py.import("sys").ok()?;
@@ -322,7 +344,9 @@ fn python_stack(entry_frames_311: usize) -> grouping::Stack {
             .extract()
             .ok()?;
         if minor >= 12 {
-            shift += entry_frames_311 - 1;
+            shift += entry_frames_311 - 1 + fewer_312;
+        } else {
+            shift += fewer_311;
         }
         let mut depth = 1;
         loop {

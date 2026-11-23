@@ -10,7 +10,8 @@
                             # that looks them up on the module (sqlparse.format(...)); a name bound earlier
                             # with `from sqlparse import format` keeps the original. sqlparse's default
                             # lexer gets the Rust tokenizer too, so sqlparse.parse() and everything else
-                            # that lexes runs it.
+                            # that lexes runs it, and FilterStack.run (callers' own filter stacks, as
+                            # django-debug-toolbar's) gets its statements grouped in Rust.
 
 The Rust is a port of sqlparse 0.6.1 checked call by call against it (see the project's README). A call goes to
 the original sqlparse, unchanged, unless all of this holds:
@@ -68,6 +69,7 @@ _original_format = sqlparse.format
 _original_split = sqlparse.split
 _original_parse = sqlparse.parse
 _original_get_tokens = _lexer.Lexer.get_tokens
+_original_run = sqlparse.engine.filter_stack.FilterStack.run
 _ported = sqlparse.__version__ == PORTED_VERSION
 
 
@@ -315,6 +317,46 @@ def _get_tokens(self, text, encoding=None):
     yield from _original_get_tokens(self, text, encoding)
 
 
+def _run(self, sql, encoding=None):
+    """sqlparse's FilterStack.run, with install(): a stack with grouping on and no token-stream filters gets its
+    statements grouped in Rust (the objects parse() returns, as sqlparse's own run has them at that point) and runs
+    its statement filters and serializers on them in Python. Anything else gets sqlparse's own run, returned as
+    is (no frame of ours under it). Which one is decided here, when run() is called; sqlparse's reads the stack's
+    filters when the first statement is asked for, so a filter added in between is the one difference."""
+    if self._grouping and not self.preprocess and type(sql) is str and _text_ported(sql) and _sqlparse_untouched():
+        return _run_grouped(self, sql, encoding)
+    return _original_run(self, sql, encoding)
+
+
+def _run_grouped(self, sql, encoding):
+    # a generator, as sqlparse's run: nothing happens until the first statement is asked for
+    too_deep = False
+    statements = None
+    try:
+        # Called from this generator, which stands where sqlparse's run stands: the Rust counts it so.
+        statements = _native.parse(sql, True)
+    except UnicodeEncodeError:
+        pass
+    except _SQLParseError as err:
+        if err.args != (_RECURSION,):
+            raise
+        too_deep = True
+    if too_deep:
+        _raise_recursion()
+    if statements is None:
+        yield from _original_run(self, sql, encoding)
+        return
+    try:
+        for stmt in statements:
+            for filter_ in self.stmtprocess:
+                filter_.process(stmt)
+            for filter_ in self.postprocess:
+                stmt = filter_.process(stmt)
+            yield stmt
+    except RecursionError as err:
+        raise _SQLParseError(_RECURSION) from err
+
+
 # Everything of sqlparse the Rust reproduces: its modules' names and its classes' attributes, as imported. Where
 # install() puts the package's own function, that one is allowed as well.
 _WATCHED_MODULES = [
@@ -326,6 +368,7 @@ _WATCHED_MODULES = [
 _INSTALLED = {
     (sqlparse, 'format'): format, (sqlparse, 'split'): split, (sqlparse, 'parse'): parse,
     (_lexer.Lexer, 'get_tokens'): _get_tokens,
+    (sqlparse.engine.filter_stack.FilterStack, 'run'): _run,
 }
 
 
@@ -433,6 +476,7 @@ def install():
     sqlparse.split = split
     sqlparse.parse = parse
     _lexer.Lexer.get_tokens = _get_tokens
+    sqlparse.engine.filter_stack.FilterStack.run = _run
     return True
 
 
@@ -442,3 +486,4 @@ def uninstall():
     sqlparse.split = _original_split
     sqlparse.parse = _original_parse
     _lexer.Lexer.get_tokens = _original_get_tokens
+    sqlparse.engine.filter_stack.FilterStack.run = _original_run

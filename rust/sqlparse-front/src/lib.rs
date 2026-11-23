@@ -313,14 +313,19 @@ fn set_sql_objects(
     Ok(())
 }
 
-/// `parse`: `sqlparse.parse(sql)`, grouped in Rust, as a tuple of sqlparse's own `Statement` objects.
+/// `parse`: `sqlparse.parse(sql)`, grouped in Rust, as a tuple of sqlparse's own `Statement` objects. With
+/// `run`, the recursion limit is counted as for sqlparse's `FilterStack.run` (called from the package's).
 #[pyfunction]
-#[pyo3(name = "parse", signature = (sql))]
-fn parse<'py>(py: Python<'py>, sql: String) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
+#[pyo3(name = "parse", signature = (sql, run=false))]
+fn parse<'py>(
+    py: Python<'py>,
+    sql: String,
+    run: bool,
+) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
     let objects = SQL_OBJECTS.get().ok_or_else(|| {
         pyo3::exceptions::PyRuntimeError::new_err("parse: set_sql_objects was not called")
     })?;
-    let parsed = port::parse_trees(&sql).map_err(error)?;
+    let parsed = port::parse_trees(&sql, run).map_err(error)?;
     let statements = parsed.to_python(py, objects);
     pyo3::types::PyTuple::new(py, statements?)
 }

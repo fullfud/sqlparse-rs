@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="420" viewBox="0 0 860 420" font-family="Segoe UI, -apple-system, Helvetica, Arial, sans-serif">
+<rect width="860" height="420" rx="14" fill="#0d0e12"/>
+<text x="28" y="38" fill="#ecedf0" font-size="20" font-weight="700">sqlparse vs sqlparse-turbo, 400 SQL queries</text>
+<text x="28" y="60" fill="#9699a2" font-size="14">seconds for all files, one call per file, Python 3.13.15; every result equal to sqlparse's</text>
+<text x="28" y="96" fill="#ecedf0" font-size="14" font-family="Cascadia Mono, Consolas, Menlo, monospace">split(sql)</text>
+<text x="832" y="96" fill="#ff8a3d" font-size="15" font-weight="700" text-anchor="end">113x faster</text>
+<rect x="28" y="106" width="171.2" height="14" rx="7" fill="#8c8f98"/>
+<text x="207.2" y="118" fill="#9699a2" font-size="13">sqlparse 0.93 s</text>
+<rect x="28" y="126" width="8.0" height="14" rx="7" fill="#ff8a3d"/>
+<text x="44.0" y="138" fill="#ff8a3d" font-size="13">sqlparse-turbo 0.008 s</text>
+<text x="28" y="170" fill="#ecedf0" font-size="14" font-family="Cascadia Mono, Consolas, Menlo, monospace">format(sql, keyword_case='upper')</text>
+<text x="832" y="170" fill="#ff8a3d" font-size="15" font-weight="700" text-anchor="end">53x faster</text>
+<rect x="28" y="180" width="181.7" height="14" rx="7" fill="#8c8f98"/>
+<text x="217.7" y="192" fill="#9699a2" font-size="13">sqlparse 0.99 s</text>
+<rect x="28" y="200" width="8.0" height="14" rx="7" fill="#ff8a3d"/>
+<text x="44.0" y="212" fill="#ff8a3d" font-size="13">sqlparse-turbo 0.019 s</text>
+<text x="28" y="244" fill="#ecedf0" font-size="14" font-family="Cascadia Mono, Consolas, Menlo, monospace">format(sql, reindent=True, keyword_case='upper')</text>
+<text x="832" y="244" fill="#ff8a3d" font-size="15" font-weight="700" text-anchor="end">30x faster</text>
+<rect x="28" y="254" width="674.0" height="14" rx="7" fill="#8c8f98"/>
+<text x="710.0" y="266" fill="#9699a2" font-size="13">sqlparse 3.68 s</text>
+<rect x="28" y="274" width="22.2" height="14" rx="7" fill="#ff8a3d"/>
+<text x="58.2" y="286" fill="#ff8a3d" font-size="13">sqlparse-turbo 0.121 s</text>
+<text x="28" y="318" fill="#ecedf0" font-size="14" font-family="Cascadia Mono, Consolas, Menlo, monospace">parse(sql)</text>
+<text x="832" y="318" fill="#ff8a3d" font-size="15" font-weight="700" text-anchor="end">17x faster</text>
+<rect x="28" y="328" width="542.8" height="14" rx="7" fill="#8c8f98"/>
+<text x="578.8" y="340" fill="#9699a2" font-size="13">sqlparse 2.96 s</text>
+<rect x="28" y="348" width="32.1" height="14" rx="7" fill="#ff8a3d"/>
+<text x="68.1" y="360" fill="#ff8a3d" font-size="13">sqlparse-turbo 0.175 s</text>
+<text x="28" y="402" fill="#5f626c" font-size="12">bench/race_times.py: best of 3 per file, 565 KB of SQL</text>
+</svg>

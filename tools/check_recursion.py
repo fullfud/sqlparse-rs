@@ -48,8 +48,28 @@ if PACKAGE:
     import sqlparse, sqlparse_turbo
 
 
+def stack_run(run, kind):
+    """A FilterStack as callers build their own (django-debug-toolbar's SQL panel: grouping, the aligned indent
+    filter, a serializer), run by sqlparse's FilterStack.run or the package's replacement."""
+    from sqlparse.engine import FilterStack
+    from sqlparse import filters
+
+    def call(t):
+        stack = FilterStack()
+        stack.enable_grouping()
+        if kind == 'aligned':
+            stack.stmtprocess.append(filters.AlignedIndentFilter())
+        if kind == 'list':
+            return list(run(stack, t))
+        stack.postprocess.append(filters.SerializerUnicode())
+        return ''.join(run(stack, t))
+    return call
+
+
 def py_call(fn, opts):
     if PACKAGE:
+        if fn.startswith('run '):
+            return stack_run(sqlparse_turbo._original_run, fn[4:])
         if fn == 'parse':
             return sqlparse.parse
         return lambda t: sqlparse.format(t, **opts)
@@ -60,6 +80,8 @@ def py_call(fn, opts):
 
 def rs_call(fn, opts):
     if PACKAGE:
+        if fn.startswith('run '):
+            return stack_run(sqlparse_turbo._run, fn[4:])
         if fn == 'parse':
             return sqlparse_turbo.parse
         return lambda t: sqlparse_turbo.format(t, **opts)
@@ -81,6 +103,14 @@ SHAPES = [
     ('BETWEEN chain, aligned', 'format', {'reindent_aligned': True}, lambda n: 'select a ' + 'between ' * n),
     ('BETWEEN chain in parens, aligned', 'format', {'reindent_aligned': True}, lambda n: 'select (select a ' + 'between ' * n + ')'),
 ]
+RUN_SHAPES = [  # the package's FilterStack.run (install()) against sqlparse's
+    ('FilterStack.run, nested BEGIN, list', 'run list', {}, lambda n: 'BEGIN ' * n + 'END ' * n),
+    ('FilterStack.run, nested BEGIN f(), joined', 'run join', {}, lambda n: 'BEGIN ' * n + 'f(x) ' + 'END ' * n),
+    ('FilterStack.run, nested BEGIN, aligned', 'run aligned', {}, lambda n: 'BEGIN ' * n + 'END ' * n),
+    ('FilterStack.run, BETWEEN chain, aligned', 'run aligned', {}, lambda n: 'select a ' + 'between ' * n),
+    ('FilterStack.run, BETWEEN chain in parens, aligned', 'run aligned', {},
+     lambda n: 'select (select a ' + 'between ' * n + ')'),
+]
 
 
 def threshold(f, shape, lo=1):
@@ -99,7 +129,7 @@ def threshold(f, shape, lo=1):
 
 def main():
     bad = 0
-    for name, fn, opts, shape in SHAPES:
+    for name, fn, opts, shape in SHAPES + (RUN_SHAPES if PACKAGE else []):
         p, r = py_call(fn, opts), rs_call(fn, opts)
         n = threshold(p, shape)
         line = [f'{name}: python fails from {n}']
