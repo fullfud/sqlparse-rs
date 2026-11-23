@@ -9,11 +9,11 @@
 </p>
 
 <p align="center"><b><a href="https://github.com/andialbrecht/sqlparse">sqlparse</a>'s <code>format()</code>,
-<code>split()</code> and <code>parse()</code>, rewritten in Rust:<br>same output, byte for byte, 17-113 times
+<code>split()</code> and <code>parse()</code>, rewritten in Rust:<br>same output, byte for byte, 22-145 times
 faster.</b></p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/fullfud/sqlparse-turbo/main/docs/assets/race.gif" alt="sqlparse.format(reindent=True, keyword_case='upper') over 400 SQL queries, each file at its measured time: sqlparse takes 3.68 s, sqlparse-turbo 0.12 s, and both give the same output (same sha256)." width="820">
+  <img src="https://raw.githubusercontent.com/fullfud/sqlparse-turbo/main/docs/assets/race.gif" alt="sqlparse.format(reindent=True, keyword_case='upper') over 400 SQL queries, each file at its measured time: sqlparse takes 3.73 s, sqlparse-turbo 0.058 s (64x), and both give the same output (same sha256)." width="820">
 </p>
 
 ```sh
@@ -62,8 +62,8 @@ sqlparse_turbo.install()
 - **[django-debug-toolbar](https://github.com/django-commons/django-debug-toolbar)** formats every query of a
   page for its SQL panel with its own sqlparse filter stack. With `install()` the statements come grouped from
   the Rust and only the toolbar's own filters run in Python: the panel formats the 400 corpus queries
-  **4.2x faster** (4.92 s → 1.17 s), the HTML identical, and a page making 200 ORM queries loads **2x faster**
-  through the toolbar (0.60 s → 0.30 s, the rest being the queries themselves and the templates).
+  **4.3x faster** (4.80 s → 1.12 s), the HTML identical, and a page making 200 ORM queries loads **2.15x faster**
+  through the toolbar (0.56 s → 0.26 s, the rest being the queries themselves and the templates).
   Measured with [`bench/django_toolbar.py`](bench/django_toolbar.py), Django 6.1, django-debug-toolbar 8.0,
   Python 3.13.
 - **Migrations** with `RunSQL` scripts and `sqlmigrate` go through `sqlparse.split` and `sqlparse.format`.
@@ -72,7 +72,7 @@ sqlparse_turbo.install()
 ## Results
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/fullfud/sqlparse-turbo/main/docs/assets/speed.svg" alt="Seconds for 400 SQL queries, one call per file, Python 3.13: split 0.93 s against 0.008 s (113x), format with keyword_case 0.99 s against 0.019 s (53x), format with reindent 3.68 s against 0.121 s (30x), parse 2.96 s against 0.175 s (17x)." width="760">
+  <img src="https://raw.githubusercontent.com/fullfud/sqlparse-turbo/main/docs/assets/speed.svg" alt="Seconds for 400 SQL queries, one call per file, Python 3.13: split 0.96 s against 0.0066 s (145x), format with keyword_case 1.00 s against 0.0095 s (106x), format with reindent 3.73 s against 0.058 s (64x), parse 2.95 s against 0.131 s (22x)." width="760">
 </p>
 
 The chart and the animation above come from [`bench/race_times.py`](bench/race_times.py) (best of 3 per file,
@@ -84,18 +84,17 @@ The whole benchmark corpus (440 files, 2.1 MB of SQL: generated queries and scri
 
 | Call | sqlparse | sqlparse_turbo | Speed-up |
 | --- | ---: | ---: | ---: |
-| `split(sql)` | 3.42 s | 0.034 s | **100x** |
-| `format(sql, keyword_case='upper')` | 3.59 s | 0.078 s | **46x** |
-| `format(sql, reindent=True, keyword_case='upper')` | 12.12 s | 0.404 s | **30x** |
-| `format(sql, strip_comments=True)` | 10.58 s | 0.321 s | **33x** |
-| `format(sql, reindent_aligned=True)` | 12.53 s | 0.395 s | **32x** |
-| `format(sql, reindent=True, indent_columns=True, comma_first=True)` | 12.86 s | 0.408 s | **32x** |
+| `split(sql)` | 4.30 s | 0.037 s | **116x** |
+| `format(sql, keyword_case='upper')` | 4.82 s | 0.046 s | **105x** |
+| `format(sql, reindent=True, keyword_case='upper')` | 13.57 s | 0.218 s | **62x** |
+| `format(sql, strip_comments=True)` | 11.69 s | 0.152 s | **77x** |
+| `format(sql, reindent_aligned=True)` | 12.33 s | 0.179 s | **69x** |
+| `format(sql, reindent=True, indent_columns=True, comma_first=True)` | 13.18 s | 0.197 s | **67x** |
 
 `split_many` over the 400 query files takes 0.003 s against sqlparse's 1.07 s (12 threads), and with
 `install()` sqlparse's `lexer.tokenize` is 20x faster.
 
-`parse(sql)` over the 400 query files: sqlparse 3.1 s, sqlparse_turbo 0.30-0.48 s (**6-10x**); with Python's
-cyclic garbage collector off, 2.8 s against 0.145 s (**19x**). The statements are grouped in Rust and handed
+`parse(sql)` over the 400 query files: sqlparse 3.0 s, sqlparse_turbo 0.13-0.18 s (**17-22x**). The statements are grouped in Rust and handed
 back as sqlparse's own `Statement`, `Identifier`, ... objects, made with `object.__new__` and their slots set
 from the Rust tree, so a group's value joined when the group was made, `normalized` taken at creation and
 every `parent` pointer are sqlparse's. A tree is a reference cycle (`parent` and `tokens`), so freeing one
@@ -110,15 +109,16 @@ Python. Both packages on the same 400 query files
 
 | Call | sqlparse | markocerkez | this one |
 | --- | ---: | ---: | ---: |
-| `split`, each file (CPython 3.13) | 0.99 s | 0.014 s | **0.010 s** |
-| `format(keyword_case='upper')` (3.13) | 1.05 s | 0.34 s | **0.021 s** |
-| `format(strip_comments=True)` (3.13) | 3.2 s | 2.5 s | **0.096 s** |
-| `format(reindent=True, keyword_case='upper')` (3.13) | 3.8 s | 3.1 s | **0.134 s** |
-| `split_many`, all files (3.13) | 1.31 s | 0.004 s | 0.004 s |
+| `split`, each file (CPython 3.13) | 1.00 s | 0.014 s | **0.008 s** |
+| `format(keyword_case='upper')` (3.13) | 1.04 s | 0.33 s | **0.011 s** |
+| `format(strip_comments=True)` (3.13) | 3.15 s | 2.48 s | **0.043 s** |
+| `format(reindent=True, keyword_case='upper')` (3.13) | 3.73 s | 3.04 s | **0.062 s** |
+| `format(reindent_aligned=True)` (3.13) | 3.42 s | 2.71 s | **0.052 s** |
+| `split_many`, all files (3.13) | 1.02 s | 0.005 s | **0.003 s** |
 | `lexer.tokenize`, each file (3.13) | 0.72 s | 0.034 s | 0.032 s |
-| `parse`, each file (3.13) | 3.1 s | 2.36 s | **0.18 s** (0.3-0.6 s as the garbage collector runs) |
-| `split`, each file (CPython 3.11) | 1.00 s | 0.77 s | **0.010 s** |
-| `format(reindent=True, keyword_case='upper')` (3.11) | 3.7 s | 3.4 s | **0.13 s** |
+| `parse`, each file (3.13) | 3.03 s | 2.30 s | **0.18 s** |
+| `split`, each file (CPython 3.11) | 0.97 s | 0.76 s | **0.010 s** |
+| `format(reindent=True, keyword_case='upper')` (3.11) | 3.65 s | 3.71 s | **0.065 s** |
 
 Its Rust tables follow the Unicode version of the Python it was generated on (3.13), and on every other
 Python it hands all non-ASCII text to sqlparse: on 3.11, 243 of the 400 files, and a script that is one of
