@@ -272,6 +272,9 @@ whole statement for every line) are walked backwards to the last line break in t
   that big, so the package gives `indent_width` above 4096 to sqlparse.
 - **A call the package hands to sqlparse** has the package's frame on the stack as well, so sqlparse's own
   recursion limit comes one nesting level sooner than when called directly.
+- **The `RecursionError` behind the recursion `SQLParseError`** says `maximum recursion depth exceeded`. On
+  CPython 3.10 sqlparse's says where Python hit the limit as well (`... in comparison`, `... in
+  __instancecheck__`), which depends on the C call sqlparse was in; the `SQLParseError` itself is the same.
 - **The front-door bindings** (`rust/sqlparse-front`, used for the recording) take typed arguments: `None`
   for a bool option is a `TypeError` there, where sqlparse treats it as False. The package never sends such
   calls to the Rust.

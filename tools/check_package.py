@@ -533,7 +533,11 @@ def patches():
                 f(deep)
                 errs.append(None)
             except Exception as e:
-                errs.append((type(e), e.args, type(e.__cause__), e.__cause__ and e.__cause__.args,
+                cause = e.__cause__ and e.__cause__.args
+                if cause and sys.version_info < (3, 11):
+                    # 3.10 names the C call that hit the limit ('... in comparison'), which the port cannot know
+                    cause = tuple(a.split(' in ')[0] if isinstance(a, str) else a for a in cause)
+                errs.append((type(e), e.args, type(e.__cause__), cause,
                              e.__suppress_context__, e.__context__ is e.__cause__))
         same(f'recursion error chain ({what})', ('ok', errs[0]), ('ok', errs[1]))
     print(f'patches: {len(changes)} kinds of patch x {len(calls)} calls, answered by sqlparse; put back, Rust')
