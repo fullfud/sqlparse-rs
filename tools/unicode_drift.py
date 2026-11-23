@@ -3,7 +3,7 @@ Unicode 14 tables the Rust is generated from (tools/gen_lexer.py, tools/gen_unic
 
     python tools/unicode_drift.py dump OUT.json            # this Python's view of every non-ASCII code point
     python tools/unicode_drift.py diff A.json B.json       # where two views differ
-    python tools/unicode_drift.py module REF.json X.json.. # write python/sqlparse_rs/_unicode_drift.py
+    python tools/unicode_drift.py module REF.json X.json.. # write python/sqlparse_turbo/_unicode_drift.py
 
 The view holds everything the port takes from Python: `re` classes under IGNORECASE | UNICODE (\\w, \\s, \\d,
 and which ASCII letters a code point matches case-insensitively, as the lexer's keyword rules do),
@@ -29,7 +29,7 @@ SIGMA = 'Σ'
 FIELDS = ['\\w', '\\s', '\\d', 'ascii fold', 'upper', 'lower', 'capitalize', 'isspace', 'strip', 'splitlines',
           'title', 'isprintable', 'sigma after', 'sigma before', 'category']
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT = os.path.join(ROOT, 'python', 'sqlparse_rs', '_unicode_drift.py')
+OUT = os.path.join(ROOT, 'python', 'sqlparse_turbo', '_unicode_drift.py')
 
 
 def view(c):

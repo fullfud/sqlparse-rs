@@ -1,7 +1,11 @@
-# sqlparse-rs
+# sqlparse-turbo
 
-**[sqlparse](https://github.com/andialbrecht/sqlparse)'s `format()` and `split()`, rewritten in Rust: same
-output, byte for byte, 30-100 times faster.**
+**[sqlparse](https://github.com/andialbrecht/sqlparse)'s `format()`, `split()` and `parse()`, rewritten in Rust:
+same output, byte for byte, 6-100 times faster.**
+
+```sh
+pip install sqlparse-turbo
+```
 
 sqlparse is the pure-Python SQL splitter and formatter that Django depends on (every SQL script a migration
 runs goes through `sqlparse.split` and `sqlparse.format`, and the test runner formats debug SQL with it), along
@@ -11,28 +15,28 @@ your output. This project ports sqlparse itself, quirks included, and proves the
 as the original on every input it has been shown.
 
 ```python
-import sqlparse_rs
+import sqlparse_turbo
 
-sqlparse_rs.format(sql, reindent=True, keyword_case='upper')   # == sqlparse.format(sql, reindent=True, ...)
-sqlparse_rs.split(sql)                                          # == sqlparse.split(sql)
-sqlparse_rs.split_many(sqls)                                    # split() of each, on all CPU threads
-sqlparse_rs.parse(sql)                                          # == sqlparse.parse(sql): sqlparse's own objects
+sqlparse_turbo.format(sql, reindent=True, keyword_case='upper')   # == sqlparse.format(sql, reindent=True, ...)
+sqlparse_turbo.split(sql)                                          # == sqlparse.split(sql)
+sqlparse_turbo.split_many(sqls)                                    # split() of each, on all CPU threads
+sqlparse_turbo.parse(sql)                                          # == sqlparse.parse(sql): sqlparse's own objects
 
-sqlparse_rs.install()    # from now on sqlparse.format / sqlparse.split are the Rust ones, for every caller,
-                         # and sqlparse.parse and sqlparse's lexer too
+sqlparse_turbo.install()    # from now on sqlparse.format / sqlparse.split are the Rust ones, for every caller,
+                            # and sqlparse.parse and sqlparse's lexer too
 ```
 
 ```sh
-sqlformat-rs -r -k upper query.sql      # sqlparse's own `sqlformat` command, formatting in Rust
+sqlformat-turbo -r -k upper query.sql      # sqlparse's own `sqlformat` command, formatting in Rust
 ```
 
 ## Results
 
 The whole benchmark corpus (440 files, 2.1 MB of SQL: generated queries and scripts), sqlparse 0.6.1 against
-`sqlparse_rs` through the same public calls, CPython 3.11, Windows 11, best of 3, every result checked equal
+`sqlparse_turbo` through the same public calls, CPython 3.11, Windows 11, best of 3, every result checked equal
 ([`bench/bench_package.py`](bench/bench_package.py)):
 
-| Call | sqlparse | sqlparse_rs | Speed-up |
+| Call | sqlparse | sqlparse_turbo | Speed-up |
 | --- | ---: | ---: | ---: |
 | `split(sql)` | 3.42 s | 0.034 s | **100x** |
 | `format(sql, keyword_case='upper')` | 3.59 s | 0.078 s | **46x** |
@@ -44,7 +48,7 @@ The whole benchmark corpus (440 files, 2.1 MB of SQL: generated queries and scri
 `split_many` over the 400 query files takes 0.003 s against sqlparse's 1.07 s (12 threads), and with
 `install()` sqlparse's `lexer.tokenize` is 20x faster.
 
-`parse(sql)` over the 400 query files: sqlparse 3.1 s, sqlparse_rs 0.30-0.48 s (**6-10x**); with Python's
+`parse(sql)` over the 400 query files: sqlparse 3.1 s, sqlparse_turbo 0.30-0.48 s (**6-10x**); with Python's
 cyclic garbage collector off, 2.8 s against 0.145 s (**19x**). The statements are grouped in Rust and handed
 back as sqlparse's own `Statement`, `Identifier`, ... objects, made with `object.__new__` and their slots set
 from the Rust tree, so a group's value joined when the group was made, `normalized` taken at creation and
@@ -53,9 +57,9 @@ waits for the garbage collector, in sqlparse as here: that collection is most of
 
 ### Against markocerkez/sqlparse-rs
 
-[markocerkez/sqlparse-rs](https://github.com/markocerkez/sqlparse-rs) (PyPI `sqlparse-rs` 0.1.0, also
-imported as `sqlparse_rs`, so the two cannot be installed together) ports sqlparse's lexer and `split` to Rust
-and leaves grouping and the filters, so `format`, in Python. Both packages on the same 400 query files
+[markocerkez/sqlparse-rs](https://github.com/markocerkez/sqlparse-rs) (PyPI `sqlparse-rs` 0.1.0, imported as
+`sqlparse_rs`) ports sqlparse's lexer and `split` to Rust and leaves grouping and the filters, so `format`, in
+Python. Both packages on the same 400 query files
 (579 KB), same machine, best of 3, every result equal to sqlparse's:
 
 | Call | sqlparse | markocerkez | this one |
@@ -78,7 +82,7 @@ Unicode versions (see Unicode versions below).
 | What was checked | Result |
 | --- | --- |
 | Recorded cases (`rust-anything diff`): the original run on the corpus, sqlparse's own test files and generated edge cases, through every option | **7,842 / 7,842 identical**, errors included |
-| sqlparse's own test suite, with `sqlparse_rs.install()` | **537 passed**, same 2 xfail / 1 xpass as plain sqlparse |
+| sqlparse's own test suite, with `sqlparse_turbo.install()` | **537 passed**, same 2 xfail / 1 xpass as plain sqlparse |
 | Statement trees (`tools/check_tree.py`): every node's class, value, type and parent, on the corpus, sqlparse's test files, 2,730 cuts of them, 40,000 random scripts and limit inputs | **260,837 calls, 0 differ** |
 | Lexer (`tools/check_tokenize.py`): recorded texts, cuts of them, random texts | **32,986 texts, 0 differ** |
 | Case filters over every Unicode code point (`tools/check_format_flat.py`) | **26.7 million texts, 0 differ** |
@@ -93,11 +97,14 @@ Unicode versions (see Unicode versions below).
 
 ## Install
 
-Not on PyPI yet. From a checkout (needs a Rust toolchain; builds with [maturin](https://www.maturin.rs/)):
-
 ```sh
-pip install .                      # pulls sqlparse==0.6.1, installs sqlparse_rs and the sqlformat-rs command
+pip install sqlparse-turbo         # pulls sqlparse==0.6.1, installs sqlparse_turbo and the sqlformat-turbo command
 ```
+
+Wheels are built for Linux x86_64 and aarch64, Windows x64 and macOS (arm64 and Intel), one abi3 wheel each for
+every CPython from 3.10 on. Elsewhere pip builds from the source distribution, which needs a Rust toolchain.
+
+From a checkout (builds with [maturin](https://www.maturin.rs/)): `pip install .`
 
 or build wheels to copy elsewhere: `maturin build --release` (an abi3 wheel: one file for every CPython from 3.10 on).
 `maturin build --release --zig --target x86_64-unknown-linux-gnu --compatibility manylinux2014 -i python3.11`
@@ -105,17 +112,17 @@ builds the Linux wheel from Windows.
 
 ## Use
 
-`sqlparse_rs.format(sql, encoding=None, **options)` and `sqlparse_rs.split(sql, encoding=None,
+`sqlparse_turbo.format(sql, encoding=None, **options)` and `sqlparse_turbo.split(sql, encoding=None,
 strip_semicolon=False)` take exactly what sqlparse's take and return exactly what they return, errors
 included: an invalid option raises `sqlparse.exceptions.SQLParseError` with sqlparse's message, and a
 statement nested past Python's recursion limit raises sqlparse's `SQLParseError('Maximum recursion depth
 exceeded')` at the same nesting depth.
 
-`sqlparse_rs.split_many(sqls, strip_semicolon=False)` is `[sqlparse.split(s) for s in sqls]`, with the texts
+`sqlparse_turbo.split_many(sqls, strip_semicolon=False)` is `[sqlparse.split(s) for s in sqls]`, with the texts
 split in Rust on all CPU threads at once and Python's lock released (texts the Rust does not take go to
 sqlparse one by one). `split` releases the lock too, so other Python threads run meanwhile.
 
-`sqlparse_rs.install()` replaces `sqlparse.format` and `sqlparse.split` on the module, so every caller that
+`sqlparse_turbo.install()` replaces `sqlparse.format` and `sqlparse.split` on the module, so every caller that
 writes `sqlparse.format(...)` (Django's `prepare_sql_script` and test runner, the `sqlformat` CLI) gets the Rust
 without changing a line. It also gives sqlparse's default lexer the Rust tokenizer (`Lexer.get_tokens`), so
 `sqlparse.parse()` and everything else that tokenizes gets faster too: the same (token type, value) pairs, with
@@ -123,7 +130,7 @@ sqlparse's own token type objects, and only for the default lexer as sqlparse se
 takes. A name bound before with `from sqlparse import format` keeps the original. `uninstall()` puts sqlparse's
 functions back. `install()` refuses (returns False) if the installed sqlparse is not 0.6.1.
 
-`sqlformat-rs` (or `python -m sqlparse_rs`) is sqlparse's `sqlformat`, same arguments, output and exit codes.
+`sqlformat-turbo` (or `python -m sqlparse_turbo`) is sqlparse's `sqlformat`, same arguments, output and exit codes.
 
 ### When the Rust runs, and when sqlparse does
 
@@ -141,7 +148,7 @@ unchanged, so the answer is always sqlparse's:
 | keywords sqlparse never reads (`filename`, `outfile`, ... as the CLI passes them) are dropped, as sqlparse ignores them | |
 | sqlparse's code as installed (Rust again once a change is put back) | a replaced, wrapped, added or deleted function, method, class or constant in sqlparse's modules (grouping, filters, `sql`, `tokens`, keywords, lexer, ...) |
 
-The rules are in [`python/sqlparse_rs/__init__.py`](python/sqlparse_rs/__init__.py).
+The rules are in [`python/sqlparse_turbo/__init__.py`](python/sqlparse_turbo/__init__.py).
 
 **Patched sqlparse.** A program that monkeypatches sqlparse (`grouping.group_identifier = ...`, a new method
 on `Identifier`, `MAX_GROUPING_TOKENS = 5`) gets its patch: the package remembers every name in sqlparse's
@@ -156,11 +163,11 @@ sigma) are taken from CPython 3.11, which has Unicode 14. Other CPythons ship ot
 assigned CJK letters become `\w` and case-insensitive keyword matching changes around them, for example). sqlparse
 follows the Python it runs on, so a text holding such a code point goes to sqlparse.
 [`tools/unicode_drift.py`](tools/unicode_drift.py) compares every code point's behaviour on each CPython with
-3.11's and writes the list ([`_unicode_drift.py`](python/sqlparse_rs/_unicode_drift.py): 839 code points for
+3.11's and writes the list ([`_unicode_drift.py`](python/sqlparse_turbo/_unicode_drift.py): 839 code points for
 Unicode 13, 4,489 / 5,116 / 10,304 for 15.0 / 15.1 / 16.0). On a Unicode version not in the list, only ASCII text
 runs in Rust. The list goes to the Rust once, as one bit per code point, and a text is checked in one pass.
 
-`sqlparse_rs.parse(sql, encoding=None)` returns what `sqlparse.parse` returns: a tuple of sqlparse's own
+`sqlparse_turbo.parse(sql, encoding=None)` returns what `sqlparse.parse` returns: a tuple of sqlparse's own
 `Statement` objects, node for node, for callers to walk and change; `install()` puts it in place of
 `sqlparse.parse` (`parsestream`, a generator, stays sqlparse's). It runs in Rust under the same conditions as
 `format()`, and raises sqlparse's `SQLParseError` at the same nesting depth.
@@ -277,7 +284,7 @@ whole statement for every line) are walked backwards to the last line break in t
 
 | Path | What |
 | --- | --- |
-| `python/sqlparse_rs/` | the package: `format`, `split`, `install`, the CLI |
+| `python/sqlparse_turbo/` | the package: `format`, `split`, `install`, the CLI |
 | `rust/sqlparse-front/src/` | the port: `lexer.rs`, `split.rs`, `tree.rs`, `grouping.rs`, `filters.rs`, `format.rs`, `port.rs` (about 3,800 hand-written lines); `lexer_tables.rs`, `pyunicode_tables.rs` are generated from Python by `tools/gen_lexer.py` and `tools/gen_unicode.py`; `lib.rs` and the conversions are generated by rust-anything |
 | `front/` | the front door rust-anything records and replays |
 | `upstream/` | sqlparse 0.6.1 (git submodule) |

@@ -1,4 +1,4 @@
-"""The package against sqlparse, through the public calls: sqlparse.format/split against sqlparse_rs.format/split.
+"""The package against sqlparse, through the public calls: sqlparse.format/split against sqlparse_turbo.format/split.
 
     python -X utf8 tools/check_package.py [--quick] [part ...]     parts: corpus fallbacks inert lexer installed
                                                                   cli unicode lexswap many patches
@@ -13,7 +13,7 @@ the whole check once).
 3. A changed default lexer goes to sqlparse; put back with default_initialization(), calls go to Rust again.
 4. Every non-ASCII code point inside SQL text through the case options: the ones this Python's Unicode tables
    treat as CPython 3.11 does run in Rust (many to a call), the others (_unicode_drift.py) go to sqlparse.
-5. The Rust lexer install() gives sqlparse, and sqlparse_rs.parse: lexer.tokenize and parse() (every node:
+5. The Rust lexer install() gives sqlparse, and sqlparse_turbo.parse: lexer.tokenize and parse() (every node:
    class, token type object, value, normalized, the is_* flags, which object its parent is) on the corpus,
    sqlparse's test files and random scripts, against sqlparse's own; parse() outside what was ported goes to
    sqlparse.
@@ -31,14 +31,14 @@ import time
 import unicodedata
 
 import sqlparse
-import sqlparse_rs
+import sqlparse_turbo
 from sqlparse import keywords, tokens
 from sqlparse.lexer import Lexer
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-NATIVE = {sqlparse_rs._native.format: 'format', sqlparse_rs._native.split: 'split',
-          sqlparse_rs._native.lex: 'lex', sqlparse_rs._native.split_many: 'split_many',
-          sqlparse_rs._native.parse: 'parse'}
+NATIVE = {sqlparse_turbo._native.format: 'format', sqlparse_turbo._native.split: 'split',
+          sqlparse_turbo._native.lex: 'lex', sqlparse_turbo._native.split_many: 'split_many',
+          sqlparse_turbo._native.parse: 'parse'}
 counts = {'format': 0, 'split': 0, 'lex': 0, 'split_many': 0, 'parse': 0}
 
 
@@ -84,7 +84,7 @@ def same(what, a, b):
     if a != b:
         bad += 1
         if bad <= 10:
-            print('MISMATCH', what, '\n  sqlparse   ', repr(a)[:300], '\n  sqlparse_rs', repr(b)[:300])
+            print('MISMATCH', what, '\n  sqlparse   ', repr(a)[:300], '\n  sqlparse_turbo', repr(b)[:300])
 
 
 OPTION_SETS = [
@@ -120,7 +120,7 @@ def corpus():
             a = plain(sqlparse.format, t, **opts)
             t1 = time.perf_counter()
             rearm()
-            b = outcome(sqlparse_rs.format, t, **opts)
+            b = outcome(sqlparse_turbo.format, t, **opts)
             t2 = time.perf_counter()
             uncounted += rearm()
             t_py += t1 - t0
@@ -131,12 +131,12 @@ def corpus():
         for strip in (False, True):
             a = plain(sqlparse.split, t, strip_semicolon=strip)
             rearm()
-            same(f'split {strip} {t[:60]!r}', a, outcome(sqlparse_rs.split, t, strip_semicolon=strip))
+            same(f'split {strip} {t[:60]!r}', a, outcome(sqlparse_turbo.split, t, strip_semicolon=strip))
             uncounted += rearm()
             n += 1
     ran = native_calls() - before
     print(f'corpus: {n} calls compared, {ran} counted in Rust, {uncounted} not countable (the hook hit the '
-          f'recursion limit); format: sqlparse {t_py:.1f} s, sqlparse_rs {t_rs:.1f} s')
+          f'recursion limit); format: sqlparse {t_py:.1f} s, sqlparse_turbo {t_rs:.1f} s')
     if ran > n or ran + uncounted < n:
         print('NOT ALL IN RUST')
         global bad
@@ -171,7 +171,7 @@ def fallbacks():
     for name, args, opts in cases:
         rearm()
         before = native_calls()
-        b = outcome(sqlparse_rs.format, *args, **opts)
+        b = outcome(sqlparse_turbo.format, *args, **opts)
         ran = native_calls() - before
         if hasattr(args[0], 'seek'):
             args[0].seek(0)
@@ -185,7 +185,7 @@ def fallbacks():
                                ('strip_semicolon=None', (sql,), {'strip_semicolon': None}),
                                ('bytes', (sql.encode(),), {})]:
         before = native_calls()
-        b = outcome(sqlparse_rs.split, *args, **kwargs)
+        b = outcome(sqlparse_turbo.split, *args, **kwargs)
         ran = native_calls() - before
         same(f'split fallback {name}', outcome(sqlparse.split, *args, **kwargs), b)
         if ran:
@@ -200,14 +200,14 @@ def inert_arguments():
     global bad
     sql = "select a, b from t where x = 1 -- note\n; select 'two'"
     cases = [
-        ('format, encoding', sqlparse.format, sqlparse_rs.format, (sql, 'utf-16'), {'reindent': True}),
-        ('format, encoding object', sqlparse.format, sqlparse_rs.format, (sql, object()), {}),
-        ('format, unknown keyword', sqlparse.format, sqlparse_rs.format, (sql,), {'no_such_option': [1]}),
-        ('format, indent_char', sqlparse.format, sqlparse_rs.format, (sql,), {'reindent': True, 'indent_char': 'x'}),
-        ('format, CLI-style keywords', sqlparse.format, sqlparse_rs.format, (sql,),
+        ('format, encoding', sqlparse.format, sqlparse_turbo.format, (sql, 'utf-16'), {'reindent': True}),
+        ('format, encoding object', sqlparse.format, sqlparse_turbo.format, (sql, object()), {}),
+        ('format, unknown keyword', sqlparse.format, sqlparse_turbo.format, (sql,), {'no_such_option': [1]}),
+        ('format, indent_char', sqlparse.format, sqlparse_turbo.format, (sql,), {'reindent': True, 'indent_char': 'x'}),
+        ('format, CLI-style keywords', sqlparse.format, sqlparse_turbo.format, (sql,),
          {'filename': ['-'], 'outfile': None, 'inplace': False, 'encoding': 'utf-8', 'reindent': True,
           'indent_char': ' ', 'keyword_case': 'upper'}),
-        ('split, encoding', sqlparse.split, sqlparse_rs.split, (sql, 'latin-1'), {}),
+        ('split, encoding', sqlparse.split, sqlparse_turbo.split, (sql, 'latin-1'), {}),
     ]
     for name, f_py, f_rs, args, kwargs in cases:
         rearm()
@@ -222,11 +222,11 @@ def inert_arguments():
 
 
 def cli():
-    """`sqlformat-rs` against sqlparse's own `sqlformat`: same output, format() run in Rust."""
+    """`sqlformat-turbo` against sqlparse's own `sqlformat`: same output, format() run in Rust."""
     global bad
     import contextlib, io, tempfile
     from sqlparse import cli as sqlcli
-    import sqlparse_rs.__main__ as rscli
+    import sqlparse_turbo.__main__ as rscli
     path = sorted(glob.glob(os.path.join(ROOT, 'bench', 'corpus', 'q*.sql')))[0]
     for args in (['-r', '-k', 'upper', path], ['--reindent_aligned', '-s', path], ['-r', '--comma_first', 'True', path],
                  ['-k', 'nope', path]):
@@ -241,7 +241,7 @@ def cli():
                 except SystemExit as e:  # argparse rejects a bad choice this way
                     code = ('exit', e.code)
             outs.append((code, buf.getvalue(), err.getvalue(), native_calls() - before))
-            sqlparse_rs.uninstall()
+            sqlparse_turbo.uninstall()
         (c1, o1, e1, _), (c2, o2, e2, ran) = outs
         same(f'cli {args[:-1]}', (c1, o1, e1), (c2, o2, e2))
         if c1 == 0 and ran != 1:
@@ -263,8 +263,8 @@ def lexer_changes():
     for name, change in changes:
         rearm()
         change()
-        for f_py, f_rs, kw in ((sqlparse.format, sqlparse_rs.format, {'reindent': True, 'keyword_case': 'upper'}),
-                               (sqlparse.split, sqlparse_rs.split, {})):
+        for f_py, f_rs, kw in ((sqlparse.format, sqlparse_turbo.format, {'reindent': True, 'keyword_case': 'upper'}),
+                               (sqlparse.split, sqlparse_turbo.split, {})):
             before = native_calls()
             b = outcome(f_rs, sql, **kw)
             ran = native_calls() - before
@@ -275,7 +275,7 @@ def lexer_changes():
         lx.default_initialization()
         before = native_calls()
         same(f'lexer restored after {name}', outcome(sqlparse.format, sql, reindent=True),
-             outcome(sqlparse_rs.format, sql, reindent=True))
+             outcome(sqlparse_turbo.format, sql, reindent=True))
         if native_calls() - before != 1:
             print('NOT IN RUST after default_initialization', name)
             bad += 1
@@ -287,7 +287,7 @@ def unicode_sweep():
     tables (case, \\w for names and keywords, splitlines, sigma). Code points that should run in Rust go 40 to a
     text; drifted ones one at a time, each of which must stay with sqlparse."""
     global bad
-    from sqlparse_rs import _unicode_drift
+    from sqlparse_turbo import _unicode_drift
     version = unicodedata.unidata_version
     if version == _unicode_drift.PORTED_UNICODE:
         drift = ()
@@ -311,7 +311,7 @@ def unicode_sweep():
             for opts in options:
                 rearm()
                 before = native_calls()
-                b = outcome(sqlparse_rs.format, text, **opts)
+                b = outcome(sqlparse_turbo.format, text, **opts)
                 ran += native_calls() - before
                 same(f'unicode {opts} U+{ord(chunk[0]):04X}..', plain(sqlparse.format, text, **opts), b)
                 n += 1
@@ -323,10 +323,10 @@ def unicode_sweep():
     for cp in sorted(drifted)[::max(1, len(drifted) // 3000)]:
         text = f'select a{chr(cp)}b from t'
         before = native_calls()
-        b = outcome(sqlparse_rs.format, text, keyword_case='upper')
+        b = outcome(sqlparse_turbo.format, text, keyword_case='upper')
         leaked += native_calls() - before
         same(f'unicode drift U+{cp:04X}', outcome(sqlparse.format, text, keyword_case='upper'), b)
-        b = outcome(sqlparse_rs.split, text + ';x')
+        b = outcome(sqlparse_turbo.split, text + ';x')
         leaked += native_calls() - before
         same(f'unicode drift split U+{cp:04X}', outcome(sqlparse.split, text + ';x'), b)
     if leaked:
@@ -339,16 +339,16 @@ def unicode_sweep():
 def installed():
     global bad
     rearm()
-    assert sqlparse_rs.install()
+    assert sqlparse_turbo.install()
     from sqlparse import format as bound_before  # bound after install: the package's
     before = native_calls()
     out = sqlparse.format('select 1', keyword_case='upper'), bound_before('select 1'), sqlparse.split('a;b')
     if native_calls() - before != 3 or out != ('SELECT 1', 'select 1', ['a;', 'b']):
         print('install() did not route calls to Rust', out)
         bad += 1
-    sqlparse_rs.uninstall()
-    if (sqlparse.format is sqlparse_rs.format or sqlparse.split is sqlparse_rs.split
-            or Lexer.get_tokens is sqlparse_rs._get_tokens):
+    sqlparse_turbo.uninstall()
+    if (sqlparse.format is sqlparse_turbo.format or sqlparse.split is sqlparse_turbo.split
+            or Lexer.get_tokens is sqlparse_turbo._get_tokens):
         print('uninstall() left the package in place')
         bad += 1
     print('install/uninstall: done')
@@ -377,14 +377,14 @@ def lexer_same(what, text):
     from sqlparse import lexer
     a = plain(lambda: [(tt, v) for tt, v in lexer.tokenize(text)])
     ta = plain(lambda: [tree(s) for s in sqlparse.parse(text)])
-    sqlparse_rs.install()
+    sqlparse_turbo.install()
     rearm()
     before = counts['lex'], counts['parse']
     b = outcome(lambda: [(tt, v) for tt, v in lexer.tokenize(text)])
     tb = outcome(lambda: [tree(s) for s in sqlparse.parse(text)])
     ran = (counts['lex'] - before[0], counts['parse'] - before[1])
-    sqlparse_rs.uninstall()
-    if tb[0] == 'ok' and ta[0] == 'ok' and type(sqlparse_rs.parse(text)) is not type(sqlparse.parse(text)):
+    sqlparse_turbo.uninstall()
+    if tb[0] == 'ok' and ta[0] == 'ok' and type(sqlparse_turbo.parse(text)) is not type(sqlparse.parse(text)):
         print('PARSE RETURNS ANOTHER TYPE', what)
         bad += 1
     same(what, a, b)
@@ -415,7 +415,7 @@ def lexer_swap():
     # what the swap must leave to sqlparse's lexer
     from sqlparse import lexer
     sql = 'select a, b from t'
-    sqlparse_rs.install()
+    sqlparse_turbo.install()
     before = counts['lex']
     other = Lexer()
     other.default_initialization()
@@ -430,7 +430,7 @@ def lexer_swap():
     leaked = counts['lex'] - before
     for args in ((sql.encode(),), (Sub(sql),), (sql.encode('utf-16'), 'utf-16'), ('select \ud800',)):
         before = counts['parse']
-        a = plain(lambda: [tree(s) for s in sqlparse_rs._original_parse(*args)])
+        a = plain(lambda: [tree(s) for s in sqlparse_turbo._original_parse(*args)])
         same(f'parse fallback {args!r}', a, outcome(lambda: [tree(s) for s in sqlparse.parse(*args)]))
         # a lone surrogate may reach the Rust, which cannot take it as UTF-8 and hands it to sqlparse
         if args[0] != 'select \ud800':
@@ -440,7 +440,7 @@ def lexer_swap():
     same('parse with a changed lexer', ('ok', changed), outcome(lambda: [tree(s) for s in sqlparse.parse(sql)]))
     leaked += counts['parse'] - before
     lx.default_initialization()
-    sqlparse_rs.uninstall()
+    sqlparse_turbo.uninstall()
     if leaked or lexed != len(texts):
         print(f'LEXER SWAP: {lexed} of {len(texts)} texts lexed in Rust, {leaked} calls that should not have been')
         bad_add()
@@ -459,7 +459,7 @@ def many():
     for strip in (False, True):
         expect = [plain(sqlparse.split, t, strip_semicolon=strip) for t in mixed]
         before = counts['split_many']
-        got = outcome(sqlparse_rs.split_many, mixed, strip_semicolon=strip)
+        got = outcome(sqlparse_turbo.split_many, mixed, strip_semicolon=strip)
         same(f'split_many strip={strip}', ('ok', [e[1] for e in expect]), got)
         if counts['split_many'] - before != 1:
             print('split_many did not run in Rust')
@@ -509,7 +509,7 @@ def patches():
             for what, call in calls:
                 expect = plain(lambda: call(sqlparse))
                 before = sum(counts.values())
-                got = outcome(lambda: call(sqlparse_rs))
+                got = outcome(lambda: call(sqlparse_turbo))
                 ran = sum(counts.values()) - before
                 same(f'patched ({name}) {what}', expect, got)
                 if ran:
@@ -519,14 +519,14 @@ def patches():
             undo()
         for what, call in calls:
             before = sum(counts.values())
-            same(f'put back ({name}) {what}', plain(lambda: call(sqlparse)), outcome(lambda: call(sqlparse_rs)))
+            same(f'put back ({name}) {what}', plain(lambda: call(sqlparse)), outcome(lambda: call(sqlparse_turbo)))
             if sum(counts.values()) - before == 0:
                 print(f'PUT BACK ({name}) {what} NOT IN RUST')
                 bad_add()
     deep = 'BEGIN ' * 1500 + 'END ' * 1500
-    for what, a, b in (('parse', sqlparse.parse, sqlparse_rs.parse),
+    for what, a, b in (('parse', sqlparse.parse, sqlparse_turbo.parse),
                        ('format', lambda t: sqlparse.format(t, reindent=True),
-                        lambda t: sqlparse_rs.format(t, reindent=True))):
+                        lambda t: sqlparse_turbo.format(t, reindent=True))):
         errs = []
         for f in (a, b):
             try:

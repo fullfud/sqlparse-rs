@@ -1,12 +1,12 @@
 """sqlparse's format() and split(), run in Rust, with sqlparse itself for everything the Rust was not proven on.
 
-    import sqlparse_rs
-    sqlparse_rs.format(sql, reindent=True, keyword_case='upper')   # same signature and result as sqlparse.format
-    sqlparse_rs.split(sql)
+    import sqlparse_turbo
+    sqlparse_turbo.format(sql, reindent=True, keyword_case='upper')   # same signature and result as sqlparse.format
+    sqlparse_turbo.split(sql)
 
-    sqlparse_rs.split_many(sqls)   # split() of each, over all CPU threads
+    sqlparse_turbo.split_many(sqls)   # split() of each, over all CPU threads
 
-    sqlparse_rs.install()   # sqlparse.format and sqlparse.split now go through here, for every caller
+    sqlparse_turbo.install()   # sqlparse.format and sqlparse.split now go through here, for every caller
                             # that looks them up on the module (sqlparse.format(...)); a name bound earlier
                             # with `from sqlparse import format` keeps the original. sqlparse's default
                             # lexer gets the Rust tokenizer too, so sqlparse.parse() and everything else

@@ -154,7 +154,7 @@ fn tree_object<'py>(
 }
 
 /// One bit per code point: those the running Python's Unicode tables treat differently from the CPython 3.11
-/// tables the port was generated from (`python/sqlparse_rs/_unicode_drift.py`). Set once by the package.
+/// tables the port was generated from (`python/sqlparse_turbo/_unicode_drift.py`). Set once by the package.
 static DRIFT: std::sync::OnceLock<Vec<u64>> = std::sync::OnceLock::new();
 
 /// Not part of the front door: the package hands over its drift list once, at import. Later calls are ignored
@@ -280,9 +280,9 @@ pub fn format(
     )
 }
 
-/// The Python package's module (`package/python/sqlparse_rs`). Its `format` stands where `sqlparse.format`
+/// The Python package's module (`package/python/sqlparse_turbo`). Its `format` stands where `sqlparse.format`
 /// stands, so a call from it has one frame on the stack that sqlparse counts in the entry point.
-const PACKAGE: &str = "sqlparse_rs";
+const PACKAGE: &str = "sqlparse_turbo";
 
 /// Frames on sqlparse's way in that CPython up to 3.11 counts against the recursion limit and 3.12 and later
 /// do not (3.12 stopped counting C calls such as `''.join(...)` and `tuple(...)`, and inlines comprehensions):

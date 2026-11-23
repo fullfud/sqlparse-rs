@@ -3,26 +3,37 @@ requires = ["maturin>=1.9,<2"]
 build-backend = "maturin"
 
 [project]
-name = "sqlparse-rs"
+name = "sqlparse-turbo"
 version = "0.1.0"
-description = "sqlparse's format() and split() rewritten in Rust, proven against the original with rust-anything"
+description = "sqlparse's format(), split() and parse() rewritten in Rust: same output, byte for byte, many times faster"
 readme = "README.md"
 license = "BSD-3-Clause"
 requires-python = ">=3.10"
 dependencies = ["sqlparse==0.6.1"]
+keywords = ["sql", "sqlparse", "formatter", "parser", "rust"]
 classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Rust",
     "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
+[project.urls]
+Repository = "https://github.com/fullfud/sqlparse-turbo"
+Issues = "https://github.com/fullfud/sqlparse-turbo/issues"
+
 [project.scripts]
-sqlformat-rs = "sqlparse_rs.__main__:main"
+sqlformat-turbo = "sqlparse_turbo.__main__:main"
 
 [tool.maturin]
 manifest-path = "rust/sqlparse-front/Cargo.toml"
 python-source = "python"
-module-name = "sqlparse_rs._native"
+module-name = "sqlparse_turbo._native"
 include = [{ path = "LICENSE", format = "sdist" }]
 # debug symbols a local Windows build leaves next to the module
-exclude = ["python/sqlparse_rs/*.pdb"]
+exclude = ["python/sqlparse_turbo/*.pdb"]

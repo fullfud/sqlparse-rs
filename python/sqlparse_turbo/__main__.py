@@ -1,4 +1,4 @@
-"""`sqlformat-rs` / `python -m sqlparse_rs`: sqlparse's own `sqlformat` command, with format() in Rust.
+"""`sqlformat-turbo` / `python -m sqlparse_turbo`: sqlparse's own `sqlformat` command, with format() in Rust.
 
 Same arguments, output and exit codes as `sqlformat` (sqlparse.cli), which looks sqlparse.format up on the module
 when it runs, so install() is all it takes.

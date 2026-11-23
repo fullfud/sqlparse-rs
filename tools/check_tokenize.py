@@ -1,6 +1,6 @@
 """Compares tokenize() of the original and of the Rust module: every recorded tokenize case, the corpus, and
 every case's SQL cut at random points (unclosed strings, comments and dollar quotes). Prints mismatches and exits 1
-on any. PYD=path loads another build of the native module (e.g. the installed package's sqlparse_rs._native);
+on any. PYD=path loads another build of the native module (e.g. the installed package's sqlparse_turbo._native);
 the texts are rust-anything's recorded cases (rust/sqlparse-front/cases.jsonl, not committed: skipped when
 missing) and the corpus (bench/gen_corpus.py)."""
 import json, os, random, sys
