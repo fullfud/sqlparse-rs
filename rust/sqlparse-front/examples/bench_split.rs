@@ -1,4 +1,8 @@
 //! Pure-Rust split timing on the corpus, no Python: cargo run --release --example bench_split
+// as the package (src/lib.rs)
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[path = "../src/lexer_tables.rs"]
 #[allow(dead_code)]
 #[rustfmt::skip]

@@ -292,18 +292,36 @@ accident is kept, because output depends on it:
 ## Speed
 
 The Rust alone, no Python (`cargo run --release --example bench_format`, `bench_lexer`, `bench_split`), same
-corpus, best of 3, before and after the last optimisation pass:
+corpus, best of 3, Windows 11, after each optimisation pass:
 
-| Step | first port | regex lexer | now |
-| --- | ---: | ---: | ---: |
-| lex (`tokenize`, 799k tokens) | 0.19 s | 0.087 s | **0.026 s** |
-| `split` | 0.21 s | 0.10 s | **0.032 s** |
-| `parse` (lex, split, group) | 0.50 s | 0.36 s | **0.30 s** |
-| `format(reindent=True, keyword_case='upper')` | 0.62 s | 0.48 s | **0.41 s** |
-| `format(strip_comments=True)` | 0.49 s | 0.37 s | **0.28 s** |
-| `format(reindent_aligned=True)` | 0.55 s | 0.41 s | **0.34 s** |
+| Step | first port | regex lexer | fast lexer (0.1.1) | **0.1.2** |
+| --- | ---: | ---: | ---: | ---: |
+| lex (`tokenize`, 799k tokens) | 0.19 s | 0.087 s | 0.026 s | **0.021 s** |
+| `split` | 0.21 s | 0.10 s | 0.032 s | **0.026 s** |
+| `parse` (lex, split, group) | 0.50 s | 0.36 s | 0.30 s | **0.126 s** |
+| `format(reindent=True, keyword_case='upper')` | 0.62 s | 0.48 s | 0.41 s | **0.201 s** |
+| `format(strip_comments=True)` | 0.49 s | 0.37 s | 0.28 s | **0.147 s** |
+| `format(reindent_aligned=True)` | 0.55 s | 0.41 s | 0.34 s | **0.178 s** |
 
-The last step was the lexer. 88 % of tokens (spaces, words, punctuation, numbers, strings, comparison
+0.1.2 went after grouping and memory, measured pass by pass and with a profiler, every change checked equal:
+
+- **Passes that cannot do anything are left out.** sqlparse runs all 25 grouping passes over every statement;
+  most statements have no `CASE`, `::`, `:=`, `OVER`, `[`, comment or `VALUES`, so the passes that start from
+  those find nothing. A pass is skipped only when none of the tokens it starts from is in the statement *and*
+  it could not have stopped on a limit either: sqlparse's grouping depth (100) and list length (10,000), which
+  every `_group` pass checks on every list, and Python's recursion limit for the passes that count frames, so
+  errors stay exactly where sqlparse raises them.
+- **Fewer allocations.** Tokens are no longer copied into a string each before the tree is built; passes walk
+  a copy of each token list taken in one shared buffer instead of a new vector per list and pass; a node's
+  own strings live in one list per tree, which shrinks a node from about 130 to 80 bytes; the indent filters'
+  keyword patterns no longer collect a keyword's characters fourteen times per look. And the module uses
+  [mimalloc](https://github.com/microsoft/mimalloc) for the Rust's own allocations (6-14 % on Linux, 17-21 % on
+  Windows, whose allocator is slow).
+- **Token types are numbers.** A token's type was compared as a string (`Token.Keyword.DML`); it is now a
+  number into the list of types, and `ttype in T.Keyword` is one bit in a table built at compile time.
+- **Keywords are found by hash**, not by a binary search comparing about ten strings per word.
+
+The step before was the lexer. 88 % of tokens (spaces, words, punctuation, numbers, strings, comparison
 operators) are now recognised by hand-written matchers that decide sqlparse's rules in sqlparse's order:
 `fast_token` in [`src/lexer.rs`](rust/sqlparse-front/src/lexer.rs). Tests pin which rules each character can
 start, and every other case still runs the regexes: a non-ASCII character where `\w` or `\d` would matter,
@@ -314,10 +332,9 @@ out of the text.
 The package adds little on top (the string crosses into Rust and back once per call, plus a look at the
 Python stack for the recursion limit).
 
-Where the Rust spends its time now on `format(reindent=True)`, whole corpus: grouping 40 % (spread over 19
-passes, the largest, `group_matching`, 8 %), lexing 20 %, the reindent filter 18 %, building the tree and
-copying tokens 8 %. No single hot spot is left; going further would mean merging grouping passes, which
-sqlparse runs one after another over the whole tree and whose order the output depends on.
+No single hot spot is left: the time is spread over the grouping passes that do run, the lexer and the indent
+filters. Going further would mean merging grouping passes, which sqlparse runs one after another over the whole
+tree and whose order the output depends on.
 
 What made it fast besides being Rust: tokens are spans into one string, the tree is an arena of indices,
 grouping passes walk the tree instead of rebuilding lists, keyword lookups use a sorted table without

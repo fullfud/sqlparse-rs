@@ -3,11 +3,11 @@
 use std::cell::Cell;
 
 use super::pystr;
-use super::tree::{Cls, Id, ROOT, Tree, tt};
+use super::tree::{Cls, Id, ROOT, TT, Tree, tt, w};
 
-const T_NUMERICAL: [&str; 3] = [tt::NUMBER, tt::NUMBER_INTEGER, tt::NUMBER_FLOAT];
-const T_STRING: [&str; 3] = [tt::STRING, tt::STRING_SINGLE, tt::STRING_SYMBOL];
-const T_NAME: [&str; 2] = [tt::NAME, tt::NAME_PLACEHOLDER];
+const T_NUMERICAL: [TT; 3] = [tt::NUMBER, tt::NUMBER_INTEGER, tt::NUMBER_FLOAT];
+const T_STRING: [TT; 3] = [tt::STRING, tt::STRING_SINGLE, tt::STRING_SYMBOL];
+const T_NAME: [TT; 2] = [tt::NAME, tt::NAME_PLACEHOLDER];
 
 const DELIMITED: [Cls; 6] = [
     Cls::Parenthesis,
@@ -55,6 +55,9 @@ pub(crate) struct Stack {
 /// How far below the limit counting frames is trusted: a caller would need this many C calls on its stack.
 const MARGIN: usize = 256;
 
+/// The most frames a pass's own body adds on a level (`keyword_search_frames`, `group_functions`'s count).
+const MAX_BODY_FRAMES: usize = 8;
+
 impl Stack {
     /// No limit: for callers outside Python.
     pub(crate) fn unlimited() -> Stack {
@@ -82,6 +85,11 @@ impl Stack {
             shift,
             exact: Cell::new(None),
         }
+    }
+
+    /// False when `frames` frames are surely within the limit (`overflows` is then false for any fewer).
+    pub(crate) fn may_overflow(&self, frames: usize) -> bool {
+        self.base.saturating_add(frames).saturating_add(MARGIN) >= self.limit
     }
 
     /// Whether `frames` frames from sqlparse's entry point up (that one included) are more than Python allows.
@@ -123,14 +131,7 @@ fn cls_in(t: &Tree, id: Id, classes: &[Cls]) -> bool {
 }
 
 /// `M_OPEN` and `M_CLOSE` of the classes `_group_matching` builds.
-fn open_close(
-    cls: Cls,
-) -> (
-    &'static str,
-    &'static [&'static str],
-    &'static str,
-    &'static [&'static str],
-) {
+fn open_close(cls: Cls) -> (TT, &'static [&'static str], TT, &'static [&'static str]) {
     match cls {
         Cls::SquareBrackets => (tt::PUNCTUATION, &["["], tt::PUNCTUATION, &["]"]),
         Cls::Parenthesis => (tt::PUNCTUATION, &["("], tt::PUNCTUATION, &[")"]),
@@ -148,8 +149,9 @@ fn group_matching(t: &mut Tree, l: Id, cls: Cls, depth: usize) -> Result<(), Str
     let (open_t, open_v, close_t, close_v) = open_close(cls);
     let mut opens: Vec<usize> = Vec::new();
     let mut offset = 0usize;
-    let snapshot = t.tokens(l).to_vec();
-    for (idx, &token) in snapshot.iter().enumerate() {
+    let (base, len) = t.snapshot(l);
+    for idx in 0..len {
+        let token = t.snapshot_at(base + idx);
         let tidx = idx - offset;
         if t.n[token].is_whitespace {
             continue;
@@ -168,6 +170,7 @@ fn group_matching(t: &mut Tree, l: Id, cls: Cls, depth: usize) -> Result<(), Str
             offset += tidx - open_idx;
         }
     }
+    t.release(base);
     Ok(())
 }
 
@@ -196,8 +199,9 @@ fn group_(t: &mut Tree, l: Id, s: &Spec, recurse: bool, depth: usize) -> Result<
     check_limits(t, l, depth)?;
     let mut offset: isize = 0;
     let mut prev: Option<(usize, Id)> = None;
-    let snapshot = t.tokens(l).to_vec();
-    for (idx, &token) in snapshot.iter().enumerate() {
+    let (base, len) = t.snapshot(l);
+    for idx in 0..len {
+        let token = t.snapshot_at(base + idx);
         let tidx = idx as isize - offset;
         if tidx < 0 {
             continue;
@@ -226,6 +230,7 @@ fn group_(t: &mut Tree, l: Id, s: &Spec, recurse: bool, depth: usize) -> Result<
         }
         prev = Some((tidx, token));
     }
+    t.release(base);
     Ok(())
 }
 
@@ -428,7 +433,7 @@ fn group_operator(t: &mut Tree) -> Result<(), String> {
         valid_next: &|t, id| id.is_some_and(|id| valid(t, id)),
         post: &|t, l, pidx, tidx, nidx| {
             let token = t.tokens(l)[tidx];
-            t.n[token].ttype = Some(tt::OPERATOR);
+            t.set_ttype(token, tt::OPERATOR);
             (pidx, nidx.expect("valid_next saw a token"))
         },
         extend: false,
@@ -496,8 +501,10 @@ fn recurse(
     f: &dyn Fn(&mut Tree, Id) -> Result<(), String>,
 ) -> Result<(), String> {
     if let Some((stack, entry, body)) = frames {
-        // sqlparse's entry point, FilterStack.run, group(), then one wrapped_f per level
-        if stack.overflows(entry + level + 1 + body(t, l)) {
+        // sqlparse's entry point, FilterStack.run, group(), then one wrapped_f per level; the pass's own
+        // frames are only worked out where they could matter
+        let fixed = entry + level + 1;
+        if stack.may_overflow(fixed + MAX_BODY_FRAMES) && stack.overflows(fixed + body(t, l)) {
             return Err(RECURSION_ERROR.into());
         }
     }
@@ -570,6 +577,14 @@ fn create_table_without_as(t: &Tree, l: Id) -> bool {
     let (mut create, mut table, mut as_) = (false, false, false);
     for &id in t.tokens(l) {
         let v = t.value(id);
+        // An ASCII first character other than c, t or a upper-cases to an ASCII letter that starts none of the
+        // three words: nothing to look at.
+        if let Some(&b) = v.as_bytes().first()
+            && b < 0x80
+            && !matches!(b, b'c' | b'C' | b't' | b'T' | b'a' | b'A')
+        {
+            continue;
+        }
         // `value.upper() == 'CREATE'`: for ASCII a case-blind compare, with no new string; other text needs
         // Python's upper() (U+017F upper-cases to S)
         if v.is_ascii() {
@@ -763,35 +778,73 @@ fn group_values(t: &mut Tree) {
 
 /// `grouping.group(stmt)`. `entry` is how many levels Python's recursion counter is up when grouping starts,
 /// from sqlparse's entry point: 3 for `parse`, 4 for `format` (measured with tools/check_recursion.py).
+///
+/// A pass is left out when it surely does nothing: none of the tokens it starts from is in the statement, and
+/// it could not run into a limit either (sqlparse's grouping depth and list length, which every `_group` pass
+/// checks on every list, or Python's recursion limit for the passes that count frames).
 pub(crate) fn group(t: &mut Tree, stack: &Stack, entry: usize) -> Result<(), String> {
-    group_comments(t)?;
-    for cls in [
-        Cls::SquareBrackets,
-        Cls::Parenthesis,
-        Cls::Case,
-        Cls::If,
-        Cls::For,
-        Cls::Begin,
-    ] {
-        group_matching(t, ROOT, cls, 0)?;
+    // whether sqlparse's limits could stop a pass that walks every list
+    let limited = |t: &mut Tree| {
+        let (height, longest) = t.shape();
+        height > 100 || longest > 10000
+    };
+    // whether Python's recursion limit could stop an @recurse pass that counts frames
+    let deep = |t: &mut Tree| {
+        let (height, _) = t.shape();
+        stack.may_overflow(entry + height + 1 + MAX_BODY_FRAMES)
+    };
+    if t.may_have_type_in(tt::COMMENT) {
+        group_comments(t)?;
     }
-    group_over(t, stack, entry)?;
+    for (cls, word) in [
+        (Cls::SquareBrackets, w::BRACKET),
+        (Cls::Parenthesis, w::PAREN),
+        (Cls::Case, w::CASE),
+        (Cls::If, w::IF),
+        (Cls::For, w::FOR),
+        (Cls::Begin, w::BEGIN),
+    ] {
+        if t.may_have_word(word) || limited(t) {
+            group_matching(t, ROOT, cls, 0)?;
+        }
+    }
+    if t.may_have_word(w::OVER) || deep(t) {
+        group_over(t, stack, entry)?;
+    }
     group_functions(t, stack, entry)?;
-    group_where(t, stack, entry)?;
+    if t.may_have_word(w::WHERE) || deep(t) {
+        group_where(t, stack, entry)?;
+    }
     group_period(t)?;
-    group_arrays(t)?;
+    if t.may_have_word(w::BRACKET) || limited(t) {
+        group_arrays(t)?;
+    }
     group_identifier(t)?;
-    group_order(t)?;
-    group_typecasts(t)?;
-    group_tzcasts(t)?;
-    group_typed_literal(t)?;
+    if t.may_have_type_in(tt::ORDER) {
+        group_order(t)?;
+    }
+    if t.may_have_word(w::CAST) || limited(t) {
+        group_typecasts(t)?;
+    }
+    if t.may_have_type(tt::TZCAST) || limited(t) {
+        group_tzcasts(t)?;
+    }
+    if t.may_have_type(tt::NAME_BUILTIN) || t.may_have_word(w::TIMESTAMP) || limited(t) {
+        group_typed_literal(t)?;
+    }
     group_operator(t)?;
     group_comparison(t)?;
     group_as(t)?;
     group_aliased(t)?;
-    group_assignment(t)?;
-    align_comments(t)?;
+    if t.may_have_type(tt::ASSIGNMENT) || limited(t) {
+        group_assignment(t)?;
+    }
+    if t.may_have_type_in(tt::COMMENT) {
+        align_comments(t)?;
+    }
     group_identifier_list(t)?;
-    group_values(t);
+    if t.may_have_word(w::VALUES) {
+        group_values(t);
+    }
     Ok(())
 }

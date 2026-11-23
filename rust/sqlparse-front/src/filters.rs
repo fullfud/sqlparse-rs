@@ -348,25 +348,25 @@ fn word_end(chars: &[char], at: usize) -> bool {
     chars.get(at).is_none_or(|&c| !is_word(c))
 }
 
-fn search(p: Pat, s: &str, ic: bool) -> bool {
-    let chars: Vec<char> = s.chars().collect();
+/// `re.search(pattern, text)` over the text's characters.
+fn search(p: Pat, chars: &[char], ic: bool) -> bool {
     let n = chars.len();
     match p {
-        Pat::Lit(lit) => (0..n).any(|i| lit_at(&chars, i, lit, ic)),
+        Pat::Lit(lit) => (0..n).any(|i| lit_at(chars, i, lit, ic)),
         Pat::End(lit) => (0..n).any(|i| {
             let e = i + lit.len();
-            lit_at(&chars, i, lit, ic) && (e == n || (e + 1 == n && chars[e] == '\n'))
+            lit_at(chars, i, lit, ic) && (e == n || (e + 1 == n && chars[e] == '\n'))
         }),
-        Pat::Join => (0..n).any(|i| lit_at(&chars, i, "JOIN", ic) && word_end(&chars, i + 4)),
+        Pat::Join => (0..n).any(|i| lit_at(chars, i, "JOIN", ic) && word_end(chars, i + 4)),
         Pat::By => (0..n).any(|i| {
-            if !(lit_at(&chars, i, "GROUP", ic) || lit_at(&chars, i, "ORDER", ic)) {
+            if !(lit_at(chars, i, "GROUP", ic) || lit_at(chars, i, "ORDER", ic)) {
                 return false;
             }
             let mut k = i + 5;
             while k < n && pystr::isspace(chars[k]) {
                 k += 1;
             }
-            k > i + 5 && lit_at(&chars, k, "BY", ic) && word_end(&chars, k + 2)
+            k > i + 5 && lit_at(chars, k, "BY", ic) && word_end(chars, k + 2)
         }),
     }
 }
@@ -376,7 +376,19 @@ fn keyword_regex(t: &Tree, id: Id, pats: &[Pat]) -> bool {
     t.ttype_is(id, tt::KEYWORD) && {
         let ic = t.n[id].is_keyword;
         let norm = t.normalized(id);
-        pats.iter().any(|&p| search(p, norm, ic))
+        // the characters once for all the patterns, on the stack for a short keyword
+        let mut buf = ['\0'; 32];
+        let owned: Vec<char>;
+        let chars: &[char] = if norm.len() <= buf.len() && norm.is_ascii() {
+            for (slot, b) in buf.iter_mut().zip(norm.bytes()) {
+                *slot = b as char;
+            }
+            &buf[..norm.len()]
+        } else {
+            owned = norm.chars().collect();
+            &owned
+        };
+        pats.iter().any(|&p| search(p, chars, ic))
     }
 }
 

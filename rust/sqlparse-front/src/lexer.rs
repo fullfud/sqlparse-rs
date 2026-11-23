@@ -98,11 +98,54 @@ pub(crate) fn in_ranges(ranges: &[(u32, u32)], c: char) -> bool {
         .is_ok()
 }
 
+/// The keyword table as an open-addressing hash table of indices into KEYWORDS (u16::MAX: empty), built once.
+/// A lookup hashes the upper-cased word and compares one or two entries, where a binary search over the 800
+/// keywords compared about ten strings.
+struct KeywordIndex {
+    slots: Vec<u16>,
+    mask: usize,
+}
+
+fn word_hash(word: &[u8]) -> usize {
+    // FNV-1a
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in word {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+    }
+    (h ^ (h >> 29)) as usize
+}
+
+fn keyword_index() -> &'static KeywordIndex {
+    static INDEX: std::sync::OnceLock<KeywordIndex> = std::sync::OnceLock::new();
+    INDEX.get_or_init(|| {
+        let size = (KEYWORDS.len() * 4).next_power_of_two();
+        let mut slots = vec![u16::MAX; size];
+        for (i, (k, _)) in KEYWORDS.iter().enumerate() {
+            let mut at = word_hash(k.as_bytes()) & (size - 1);
+            while slots[at] != u16::MAX {
+                at = (at + 1) & (size - 1);
+            }
+            slots[at] = i as u16;
+        }
+        KeywordIndex {
+            slots,
+            mask: size - 1,
+        }
+    })
+}
+
 /// `Lexer.is_keyword`: the keyword's token type, or `Token.Name`.
 fn keyword_type(value: &str) -> &'static str {
-    let find = |up: &[u8]| match KEYWORDS.binary_search_by(|(k, _)| k.as_bytes().cmp(up)) {
-        Ok(i) => KEYWORDS[i].1,
-        Err(_) => "Token.Name",
+    let find = |up: &[u8]| {
+        let index = keyword_index();
+        let mut at = word_hash(up) & index.mask;
+        loop {
+            match index.slots[at] {
+                u16::MAX => return "Token.Name",
+                i if KEYWORDS[i as usize].0.as_bytes() == up => return KEYWORDS[i as usize].1,
+                _ => at = (at + 1) & index.mask,
+            }
+        }
     };
     // Nearly every word is short ASCII: upper-case it on the stack instead of in a new String.
     let mut buf = [0u8; 32];
@@ -548,6 +591,38 @@ pub(crate) fn tokenize(text: &str) -> Vec<(&'static str, &str)> {
 #[cfg(test)]
 mod fast_path_tests {
     use super::*;
+
+    /// The hash index finds every keyword, and nothing else, as a binary search over the sorted table does.
+    #[test]
+    fn keyword_index_matches_table() {
+        assert!(
+            KEYWORDS.windows(2).all(|w| w[0].0 < w[1].0),
+            "KEYWORDS sorted, no repeats"
+        );
+        let search = |w: &str| match KEYWORDS.binary_search_by(|(k, _)| k.cmp(&w)) {
+            Ok(i) => KEYWORDS[i].1,
+            Err(_) => "Token.Name",
+        };
+        for &(k, ttype) in KEYWORDS.iter() {
+            assert_eq!(keyword_type(k), ttype, "{k}");
+            assert_eq!(
+                keyword_type(&k.to_lowercase()),
+                search(&k.to_uppercase()),
+                "{k}"
+            );
+            for extra in ["X", "_", " "] {
+                let w = format!("{k}{extra}");
+                assert_eq!(keyword_type(&w), search(&w.to_uppercase()), "{w}");
+            }
+        }
+        for w in ["", "x", "selec", "ſelect", "naïve", "ORDER  BY"] {
+            assert_eq!(
+                keyword_type(w),
+                search(&super::super::pystr::upper(w)),
+                "{w}"
+            );
+        }
+    }
 
     /// The rules each fast-path character can start, as `fast_token` and `fast_word` assume them.
     #[test]

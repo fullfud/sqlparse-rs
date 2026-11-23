@@ -1,4 +1,8 @@
 //! Pure-Rust format timing on the corpus, no Python: cargo run --release --example bench_format
+// as the package (src/lib.rs)
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[path = "../src/filters.rs"]
 mod filters;
 #[path = "../src/format.rs"]
@@ -85,7 +89,12 @@ fn main() {
             },
         ),
     ];
+    // BENCH_ONLY=name runs one option set (for a profiler)
+    let only = std::env::var("BENCH_ONLY").ok();
     for (name, o) in &sets {
+        if only.as_deref().is_some_and(|only| only != *name) {
+            continue;
+        }
         let mut best = f64::MAX;
         let mut n = 0;
         for _ in 0..3 {

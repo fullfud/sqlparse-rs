@@ -1,4 +1,8 @@
 //! Pure-Rust lexer timing on the corpus, no Python: cargo run --release --example bench_lexer
+// as the package (src/lib.rs)
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[path = "../src/lexer.rs"]
 #[allow(dead_code)]
 mod lexer;

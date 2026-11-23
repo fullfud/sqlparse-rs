@@ -314,14 +314,15 @@ fn serialize(text: &str, out: &mut String) {
 /// `sqlparse.format(text, **options)`. `stack` says where Python's recursion limit stands for the call.
 pub(crate) fn format(text: &str, o: &Options, stack: &Stack) -> Result<String, String> {
     let plan = validate(o)?;
-    let mut tokens: Vec<(&'static str, String)> = lexer::tokenize(text)
+    // values stay slices of the text unless a preprocess filter changes them
+    let mut tokens: Vec<(&'static str, std::borrow::Cow<str>)> = lexer::tokenize(text)
         .into_iter()
-        .map(|(t, v)| (t, v.to_string()))
+        .map(|(t, v)| (t, std::borrow::Cow::Borrowed(v)))
         .collect();
     if let Some(case) = plan.keyword_case {
         for (t, v) in &mut tokens {
             if is_a(t, "Token.Keyword") {
-                *v = convert(case, v);
+                *v = convert(case, v).into();
             }
         }
     }
@@ -330,14 +331,14 @@ pub(crate) fn format(text: &str, o: &Options, stack: &Stack) -> Result<String, S
             if (*t == "Token.Name" || *t == "Token.Literal.String.Symbol")
                 && !pystr::strip(v).starts_with('"')
             {
-                *v = convert(case, v);
+                *v = convert(case, v).into();
             }
         }
     }
     if let Some((width, fill)) = &plan.truncate {
         for (t, v) in &mut tokens {
             if *t == "Token.Literal.String.Single" {
-                *v = truncate(v, *width, fill);
+                *v = truncate(v, *width, fill).into();
             }
         }
     }
@@ -358,7 +359,7 @@ pub(crate) fn format(text: &str, o: &Options, stack: &Stack) -> Result<String, S
     let mut aligned = o
         .reindent_aligned
         .then(|| Aligned::new(o.indent_tabs, stack));
-    let view: Vec<(&'static str, &str)> = tokens.iter().map(|(t, v)| (*t, v.as_str())).collect();
+    let view: Vec<(&'static str, &str)> = tokens.iter().map(|(t, v)| (*t, v.as_ref())).collect();
     let mut out = String::with_capacity(text.len());
     for (count, range) in statements(&view).into_iter().enumerate() {
         let stmt = &tokens[range];
@@ -402,10 +403,10 @@ pub(crate) fn format(text: &str, o: &Options, stack: &Stack) -> Result<String, S
             }
             text
         } else {
-            let joined: String = stmt.iter().map(|(_, v)| v.as_str()).collect();
+            let joined: String = stmt.iter().map(|(_, v)| v.as_ref()).collect();
             match plan.output {
                 Some(kind) => {
-                    let top = stmt.iter().map(|(t, v)| (is_a(t, WHITESPACE), v.as_str()));
+                    let top = stmt.iter().map(|(t, v)| (is_a(t, WHITESPACE), v.as_ref()));
                     output_filter(kind, &joined, top, count + 1)
                 }
                 None => joined,
@@ -418,13 +419,9 @@ pub(crate) fn format(text: &str, o: &Options, stack: &Stack) -> Result<String, S
 
 /// `sqlparse.parse(text)`: the grouped statements.
 pub(crate) fn parse(text: &str, stack: &Stack) -> Result<Vec<Tree>, String> {
-    let tokens: Vec<(&'static str, String)> = lexer::tokenize(text)
-        .into_iter()
-        .map(|(t, v)| (t, v.to_string()))
-        .collect();
-    let view: Vec<(&'static str, &str)> = tokens.iter().map(|(t, v)| (*t, v.as_str())).collect();
+    let tokens = lexer::tokenize(text);
     let mut trees = Vec::new();
-    for range in statements(&view) {
+    for range in statements(&tokens) {
         let mut tree = Tree::statement(&tokens[range]);
         grouping::group(&mut tree, stack, 3)?;
         trees.push(tree);
