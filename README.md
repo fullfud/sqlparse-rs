@@ -98,7 +98,7 @@ Unicode versions (see Unicode versions below).
 ## Install
 
 ```sh
-pip install sqlparse-turbo         # pulls sqlparse==0.6.1, installs sqlparse_turbo and the sqlformat-turbo command
+pip install sqlparse-turbo         # installs sqlparse_turbo and the sqlformat-turbo command, and sqlparse if missing
 ```
 
 Wheels are built for Linux x86_64 and aarch64, Windows x64 and macOS (arm64 and Intel), one abi3 wheel each for

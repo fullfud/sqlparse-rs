@@ -12,3 +12,4 @@ rust/*/python/*/_native.tmp-*
 dist/
 python/sqlparse_turbo/_native*
 python/sqlparse_turbo/*.pdb
+dist-local/

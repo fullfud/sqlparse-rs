@@ -143,11 +143,34 @@ jobs:
           python -X utf8 tools/check_tokenize.py
           python -X utf8 tools/check_tree.py quick
 
+  other-sqlparse:
+    name: With sqlparse ${{ matrix.sqlparse }} (all calls to sqlparse)
+    needs: wheels
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sqlparse: ["0.4.4", "0.5.3", "0.6.0"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheels-linux-x86_64
+          path: dist
+      - run: |
+          python -m pip install sqlparse==${{ matrix.sqlparse }}
+          python -m pip install --no-index --find-links dist --no-deps sqlparse-turbo
+          python bench/gen_corpus.py
+          python -X utf8 tools/check_other_sqlparse.py
+
   publish:
     name: Upload to PyPI
     # only for a version tag, and only once every wheel passed every check
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [rust, sdist, test]
+    needs: [rust, sdist, test, other-sqlparse]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:

@@ -9,7 +9,8 @@ description = "sqlparse's format(), split() and parse() rewritten in Rust: same 
 readme = "README.md"
 license = "BSD-3-Clause"
 requires-python = ">=3.10"
-dependencies = ["sqlparse==0.6.1"]
+# Runs in Rust with sqlparse 0.6.1; with any other version every call is sqlparse's own (see the README)
+dependencies = ["sqlparse>=0.4"]
 keywords = ["sql", "sqlparse", "formatter", "parser", "rust"]
 classifiers = [
     "Development Status :: 4 - Beta",

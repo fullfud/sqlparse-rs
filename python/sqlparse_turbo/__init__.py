@@ -15,7 +15,8 @@
 The Rust is a port of sqlparse 0.6.1 checked call by call against it (see the project's README). A call goes to
 the original sqlparse, unchanged, unless all of this holds:
 
-- the installed sqlparse is 0.6.1;
+- the installed sqlparse is 0.6.1 (with any other version every call goes to sqlparse, and install() does
+  nothing);
 - `sql` is a `str` (not bytes, not a stream, not a subclass); `encoding` is then not used, as in sqlparse,
   which only decodes bytes with it;
 - sqlparse's default lexer is as sqlparse sets it up (no add_keywords, set_SQL_REGEX, clear), and nothing in
@@ -234,7 +235,14 @@ def split(sql, encoding=None, strip_semicolon=False):
             return _native.split(sql, strip_semicolon)
         except UnicodeEncodeError:
             pass
-    return _original_split(sql, encoding, strip_semicolon)
+    return _sqlparse_split(sql, encoding, strip_semicolon)
+
+
+def _sqlparse_split(sql, encoding, strip_semicolon):
+    # sqlparse before 0.5 has no strip_semicolon: left out unless asked for, as a direct call would
+    if strip_semicolon is False:
+        return _original_split(sql, encoding)
+    return _original_split(sql, encoding, strip_semicolon=strip_semicolon)
 
 
 def split_many(sqls, encoding=None, strip_semicolon=False):
@@ -252,7 +260,7 @@ def split_many(sqls, encoding=None, strip_semicolon=False):
                 pass
     for i, statements in enumerate(out):
         if statements is None:
-            out[i] = _original_split(sqls[i], encoding, strip_semicolon)
+            out[i] = _sqlparse_split(sqls[i], encoding, strip_semicolon)
     return out
 
 
@@ -263,11 +271,12 @@ def _token_type(name):
     return t
 
 
-_native.set_token_types({name: _token_type(name) for name in _native.token_type_names()})
-_native.set_sql_objects(
-    {name: cls for name, cls in vars(_sql).items() if isinstance(cls, type) and issubclass(cls, _sql.Token)},
-    object.__new__,
-)
+if _ported:
+    _native.set_token_types({name: _token_type(name) for name in _native.token_type_names()})
+    _native.set_sql_objects(
+        {name: cls for name, cls in vars(_sql).items() if isinstance(cls, type) and issubclass(cls, _sql.Token)},
+        object.__new__,
+    )
 
 
 def parse(sql, encoding=None):
@@ -347,7 +356,7 @@ def _watch():
     return [namespace for namespace, _, _ in watch]
 
 
-_watched_dicts = _watch()
+_watched_dicts = _watch() if _ported else []
 
 # Comparing every watched name costs a few microseconds a call. CPython 3.12+ can tell us instead when one of
 # these dicts changes (a dict watcher): the comparison then runs once after a change, not on every call. On
@@ -400,7 +409,7 @@ def _add_watchers(dicts):
     return True
 
 
-_watching = _add_watchers(_watched_dicts)
+_watching = _add_watchers(_watched_dicts) if _ported else False
 
 
 def _sqlparse_untouched():
