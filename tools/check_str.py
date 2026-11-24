@@ -114,13 +114,22 @@ def at_depth(n, f):
     return f() if n <= 0 else at_depth(n - 1, f)
 
 
+def near(n, f):
+    """f() from n frames down; the RecursionError of this harness itself (its own handler can run out of stack
+    right at the limit, and before 3.12 C calls count too) as a result."""
+    try:
+        return at_depth(n, f)
+    except RecursionError:
+        return 'RecursionError (harness)'
+
+
 limit = sys.getrecursionlimit()
 here = len(__import__('inspect').stack(0))
 for left in (3, 10, 40, 120, 300):
     for depth in (5, 60):
         t = nest(depth)
-        want = at_depth(limit - here - left, lambda t=t: outcome(original, t))
-        got = at_depth(limit - here - left, lambda t=t: outcome(str, t))
+        want = near(limit - here - left, lambda t=t: outcome(original, t))
+        got = near(limit - here - left, lambda t=t: outcome(str, t))
         counts['near limit'] = counts.get('near limit', 0) + 1
         if want != got:
             bad.append(f'near the limit ({left} left, depth {depth}): {want} != {got}')
