@@ -527,74 +527,92 @@ pub(crate) fn type_names() -> Vec<&'static str> {
 pub(crate) fn tokenize(text: &str) -> Vec<(&'static str, &str)> {
     let spans = find_delimited_spans(text);
     let mut out = Vec::new();
-    let mut pos = 0;
-    while let Some((ttype, end)) = token_at(text, &spans, pos) {
-        out.push((ttype, &text[pos..end]));
-        pos = end;
-    }
+    lex(text, &spans, 0, usize::MAX, &mut out);
     out
 }
 
-/// The token the lexer finds at `pos` (where the one before it ended): its type and where it ends. None at the
-/// end of the text. `spans` is `find_delimited_spans(text)`.
-#[inline]
-pub(crate) fn token_at(text: &str, spans: &Spans, pos: usize) -> Option<(&'static str, usize)> {
-    if pos >= text.len() {
-        return None;
-    }
-    if let Some((end, ttype)) = spans.resolve(pos) {
-        return Some((ttype, end));
-    }
-    if text.as_bytes()[pos] < 0x80 {
-        match fast_token(text.as_bytes(), pos) {
-            Fast::Token(ttype, len) => return Some((ttype, pos + len)),
-            Fast::Phrase(list, len) => {
-                let rules = rules();
-                let rest = &text[pos..];
-                for &i in list {
-                    let rule = &rules.all[i];
-                    if rule.prefilter.as_ref().is_some_and(|p| !p.is_match(rest)) {
-                        continue;
-                    }
-                    if let Ok(Some(m)) = rule.re.find(rest) {
-                        let ttype = match rule.action {
-                            Action::Token(t) => t,
-                            Action::Keyword => keyword_type(&rest[..m.end()]),
-                        };
-                        return Some((ttype, pos + m.end()));
-                    }
-                }
-                return Some((keyword_type(&rest[..len]), pos + len));
-            }
-            Fast::Rules => {}
-        }
-    }
+/// The lexer from `pos` (where a token starts) to the end of the text, or until `max` tokens were added to
+/// `out`: where it stopped. `spans` is `find_delimited_spans(text)`.
+pub(crate) fn lex<'a>(
+    text: &'a str,
+    spans: &Spans,
+    mut pos: usize,
+    max: usize,
+    out: &mut Vec<(&'static str, &'a str)>,
+) -> usize {
     let rules = rules();
-    let prev = text[..pos].chars().next_back();
-    let rest = &text[pos..];
-    let here = rest.chars().next()?;
-    for rule in rules.candidates(here) {
-        let allowed = match rule.before {
-            Before::Any => true,
-            Before::In(r) => prev.is_some_and(|c| in_ranges(r, c)),
-            Before::NotIn(r) => prev.is_none_or(|c| !in_ranges(r, c)),
-        };
-        if !allowed {
+    let limit = out.len().saturating_add(max);
+    'outer: while pos < text.len() && out.len() < limit {
+        if let Some((end, ttype)) = spans.resolve(pos) {
+            out.push((ttype, &text[pos..end]));
+            pos = end;
             continue;
         }
-        if rule.prefilter.as_ref().is_some_and(|p| !p.is_match(rest)) {
-            continue;
+        if text.as_bytes()[pos] < 0x80 {
+            match fast_token(text.as_bytes(), pos) {
+                Fast::Token(ttype, len) => {
+                    out.push((ttype, &text[pos..pos + len]));
+                    pos += len;
+                    continue;
+                }
+                Fast::Phrase(list, len) => {
+                    let rest = &text[pos..];
+                    for &i in list {
+                        let rule = &rules.all[i];
+                        if rule.prefilter.as_ref().is_some_and(|p| !p.is_match(rest)) {
+                            continue;
+                        }
+                        if let Ok(Some(m)) = rule.re.find(rest) {
+                            let ttype = match rule.action {
+                                Action::Token(t) => t,
+                                Action::Keyword => keyword_type(&rest[..m.end()]),
+                            };
+                            out.push((ttype, &rest[..m.end()]));
+                            pos += m.end();
+                            continue 'outer;
+                        }
+                    }
+                    out.push((keyword_type(&rest[..len]), &rest[..len]));
+                    pos += len;
+                    continue;
+                }
+                Fast::Rules => {}
+            }
         }
-        let Ok(Some(m)) = rule.re.find(rest) else {
-            continue;
+        let prev = text[..pos].chars().next_back();
+        let rest = &text[pos..];
+        let Some(here) = rest.chars().next() else {
+            break;
         };
-        let ttype = match rule.action {
-            Action::Token(t) => t,
-            Action::Keyword => keyword_type(&rest[..m.end()]),
-        };
-        return Some((ttype, pos + m.end()));
+        for rule in rules.candidates(here) {
+            let allowed = match rule.before {
+                Before::Any => true,
+                Before::In(r) => prev.is_some_and(|c| in_ranges(r, c)),
+                Before::NotIn(r) => prev.is_none_or(|c| !in_ranges(r, c)),
+            };
+            if !allowed {
+                continue;
+            }
+            if rule.prefilter.as_ref().is_some_and(|p| !p.is_match(rest)) {
+                continue;
+            }
+            let Ok(Some(m)) = rule.re.find(rest) else {
+                continue;
+            };
+            let value = &rest[..m.end()];
+            let ttype = match rule.action {
+                Action::Token(t) => t,
+                Action::Keyword => keyword_type(value),
+            };
+            out.push((ttype, value));
+            pos += m.end();
+            continue 'outer;
+        }
+        let c = here.len_utf8();
+        out.push(("Token.Error", &rest[..c]));
+        pos += c;
     }
-    Some(("Token.Error", pos + here.len_utf8()))
+    pos
 }
 
 #[cfg(test)]

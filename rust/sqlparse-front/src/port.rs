@@ -62,6 +62,9 @@ pub struct Lazy {
     spans: lexer::Spans,
     /// Where the lexer goes on from.
     pos: usize,
+    /// Tokens lexed ahead as (type, start, end) in `text`, from `ahead_at` on not yet given to the splitter.
+    ahead: Vec<(&'static str, usize, usize)>,
+    ahead_at: usize,
     splitter: split::Feed,
     /// The first token of the next statement as (type, start, end) in `text`: read, and given to the splitter,
     /// when it ended the statement before it.
@@ -136,6 +139,8 @@ const ALIGNED_FRAMES: usize = 40;
 const REINDENT_HEIGHT: usize = 60;
 const REINDENT_FRAMES_PER_LEVEL: usize = 4;
 const REINDENT_FRAMES: usize = 40;
+/// Tokens `Lazy` lexes at a time: the lexer's own loop runs over a chunk, and memory stays bounded.
+const LEX_AHEAD: usize = 1024;
 
 impl Lazy {
     pub fn new(text: String) -> Lazy {
@@ -145,18 +150,37 @@ impl Lazy {
             text,
             spans,
             pos: 0,
+            ahead: Vec::new(),
+            ahead_at: 0,
             splitter: split::Feed::default(),
             pending: None,
             current: Vec::new(),
         }
     }
 
+    /// The next token as (type, start, end) in `text`, lexed a chunk at a time; None at the end of the text.
+    fn token(&mut self) -> Option<(&'static str, usize, usize)> {
+        if self.ahead_at == self.ahead.len() {
+            self.ahead.clear();
+            self.ahead_at = 0;
+            let mut chunk = Vec::with_capacity(LEX_AHEAD);
+            self.pos = lexer::lex(&self.text, &self.spans, self.pos, LEX_AHEAD, &mut chunk);
+            let base = self.text.as_ptr() as usize;
+            self.ahead.extend(chunk.iter().map(|&(ttype, value)| {
+                let start = value.as_ptr() as usize - base;
+                (ttype, start, start + value.len())
+            }));
+        }
+        let token = self.ahead.get(self.ahead_at).copied()?;
+        self.ahead_at += 1;
+        Some(token)
+    }
+
     /// Lexes the next statement into `current`, as sqlparse's splitter cuts it; false after the last.
     fn take(&mut self) -> bool {
         self.current.clear();
         self.current.extend(self.pending.take());
-        while let Some((ttype, end)) = lexer::token_at(&self.text, &self.spans, self.pos) {
-            let start = std::mem::replace(&mut self.pos, end);
+        while let Some((ttype, start, end)) = self.token() {
             if self.splitter.token(ttype, &self.text[start..end]) {
                 self.pending = Some((ttype, start, end));
                 return true;
