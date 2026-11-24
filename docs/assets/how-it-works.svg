@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="344" viewBox="0 0 860 344" font-family="Segoe UI, -apple-system, Helvetica, Arial, sans-serif">
+<defs>
+<marker id="m0" viewBox="0 0 10 10" refX="8" refY="5" markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#9699a2"/></marker>
+<marker id="m1" viewBox="0 0 10 10" refX="8" refY="5" markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#ff8a3d"/></marker>
+<marker id="m2" viewBox="0 0 10 10" refX="8" refY="5" markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#8c8f98"/></marker>
+</defs>
+<rect width="860" height="344" rx="14" fill="#0d0e12"/>
+<text x="28" y="38" fill="#ecedf0" font-size="20" font-weight="700">How a call runs</text>
+<text x="28" y="60" fill="#9699a2" font-size="14">every call is checked first; whichever side answers, the answer is sqlparse's</text>
+<rect x="28" y="84" width="200.0" height="212" rx="10" fill="#16171d" stroke="#2a2c34" stroke-width="1.2"/>
+<text x="48" y="114" fill="#ecedf0" font-size="17" font-weight="700">Your code</text>
+<text x="48" y="134" fill="#9699a2" font-size="13">Django, tools, scripts</text>
+<text x="48" y="170" fill="#ecedf0" font-size="13" font-family="Cascadia Mono, Consolas, Menlo, monospace">sqlparse.format(sql)</text>
+<text x="48" y="194" fill="#ecedf0" font-size="13" font-family="Cascadia Mono, Consolas, Menlo, monospace">sqlparse.split(sql)</text>
+<text x="48" y="218" fill="#ecedf0" font-size="13" font-family="Cascadia Mono, Consolas, Menlo, monospace">sqlparse.parse(sql)</text>
+<text x="48" y="242" fill="#ecedf0" font-size="13" font-family="Cascadia Mono, Consolas, Menlo, monospace">parsestream(stream)</text>
+<text x="48" y="280" fill="#5f626c" font-size="12">with install() in place</text>
+<path d="M232 190.0 H258" fill="none" stroke="#9699a2" stroke-width="2" marker-end="url(#m0)"/>
+<rect x="264" y="84" width="250.0" height="212" rx="10" fill="#16171d" stroke="#2a2c34" stroke-width="1.2"/>
+<text x="284" y="114" fill="#ecedf0" font-size="17" font-weight="700">sqlparse_turbo checks</text>
+<polyline points="286,142 290,146 298,137" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="306" y="146" fill="#ecedf0" font-size="13">sqlparse is 0.6.1</text>
+<polyline points="286,166 290,170 298,161" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="306" y="170" fill="#ecedf0" font-size="13">str, bytes or a text stream</text>
+<polyline points="286,190 290,194 298,185" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="306" y="194" fill="#ecedf0" font-size="13">options of the exact types</text>
+<polyline points="286,214 290,218 298,209" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="306" y="218" fill="#ecedf0" font-size="13">sqlparse not monkeypatched</text>
+<polyline points="286,238 290,242 298,233" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="306" y="242" fill="#ecedf0" font-size="13">default lexer unchanged</text>
+<polyline points="286,262 290,266 298,257" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="306" y="266" fill="#ecedf0" font-size="13">no Unicode drift in the text</text>
+<rect x="570" y="84" width="262.0" height="98" rx="10" fill="#16171d" stroke="#ff8a3d" stroke-width="1.2"/>
+<text x="590" y="108" fill="#9699a2" font-size="12">every check passes</text>
+<text x="812" y="108" fill="#ff8a3d" font-size="12" font-weight="700" text-anchor="end">30-150x faster</text>
+<text x="590" y="136" fill="#ff8a3d" font-size="19" font-weight="700">the Rust port</text>
+<text x="590" y="162" fill="#9699a2" font-size="13">lexer, splitter, grouping, filters</text>
+<rect x="570" y="198" width="262.0" height="98" rx="10" fill="#16171d" stroke="#2a2c34" stroke-width="1.2" stroke-dasharray="5 4"/>
+<text x="590" y="222" fill="#9699a2" font-size="12">any check fails</text>
+<text x="590" y="250" fill="#ecedf0" font-size="19" font-weight="700">sqlparse 0.6.1 itself</text>
+<text x="590" y="276" fill="#9699a2" font-size="13">unchanged, at its own speed</text>
+<path d="M516 190.0 H540 V133.0 H566" fill="none" stroke="#ff8a3d" stroke-width="2" marker-end="url(#m1)"/>
+<path d="M540 190.0 V247.0 H566" fill="none" stroke="#8c8f98" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#m2)"/>
+<text x="28" y="326" fill="#ecedf0" font-size="14">Same output, byte for byte, and the same errors, whichever side answers.</text>
+</svg>

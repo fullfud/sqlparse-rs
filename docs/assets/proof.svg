@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="344" viewBox="0 0 860 344" font-family="Segoe UI, -apple-system, Helvetica, Arial, sans-serif">
+<rect width="860" height="344" rx="14" fill="#0d0e12"/>
+<text x="28" y="38" fill="#ecedf0" font-size="20" font-weight="700">Checked against sqlparse itself</text>
+<text x="28" y="60" fill="#9699a2" font-size="14">the port has to give the answer sqlparse gives, on everything it is shown</text>
+<rect x="28" y="82" width="257.3" height="100" rx="10" fill="#16171d" stroke="#2a2c34" stroke-width="1.2"/>
+<text x="48" y="124" fill="#ff8a3d" font-size="27" font-weight="700">7,842 / 7,842</text>
+<text x="48" y="148" fill="#9699a2" font-size="13">recorded calls give sqlparse's</text>
+<text x="48" y="166" fill="#9699a2" font-size="13">answer, errors included</text>
+<rect x="301.333" y="82" width="257.3" height="100" rx="10" fill="#16171d" stroke="#2a2c34" stroke-width="1.2"/>
+<text x="321.333" y="124" fill="#ff8a3d" font-size="27" font-weight="700">537 passed</text>
+<text x="321.333" y="148" fill="#9699a2" font-size="13">sqlparse's own test suite,</text>
+<text x="321.333" y="166" fill="#9699a2" font-size="13">run through the package</text>
+<rect x="574.667" y="82" width="257.3" height="100" rx="10" fill="#16171d" stroke="#2a2c34" stroke-width="1.2"/>
+<text x="594.667" y="124" fill="#ff8a3d" font-size="27" font-weight="700">260,837 trees</text>
+<text x="594.667" y="148" fill="#9699a2" font-size="13">compared node by node with</text>
+<text x="594.667" y="166" fill="#9699a2" font-size="13">sqlparse's: 0 differ</text>
+<rect x="28" y="198" width="257.3" height="100" rx="10" fill="#16171d" stroke="#2a2c34" stroke-width="1.2"/>
+<text x="48" y="240" fill="#ff8a3d" font-size="27" font-weight="700">26.7 million</text>
+<text x="48" y="264" fill="#9699a2" font-size="13">texts over every Unicode code</text>
+<text x="48" y="282" fill="#9699a2" font-size="13">point: 0 differ</text>
+<rect x="301.333" y="198" width="257.3" height="100" rx="10" fill="#16171d" stroke="#2a2c34" stroke-width="1.2"/>
+<text x="321.333" y="240" fill="#ff8a3d" font-size="27" font-weight="700">25 / 25</text>
+<text x="321.333" y="264" fill="#9699a2" font-size="13">platform × Python jobs in CI</text>
+<text x="321.333" y="282" fill="#9699a2" font-size="13">test the wheel users install</text>
+<rect x="574.667" y="198" width="257.3" height="100" rx="10" fill="#16171d" stroke="#2a2c34" stroke-width="1.2"/>
+<text x="594.667" y="240" fill="#ff8a3d" font-size="27" font-weight="700">same depth</text>
+<text x="594.667" y="264" fill="#9699a2" font-size="13">the recursion error comes at</text>
+<text x="594.667" y="282" fill="#9699a2" font-size="13">sqlparse's nesting, 3.10-3.14</text>
+<text x="28" y="330" fill="#5f626c" font-size="12">Every check is a script in tools/; the whole list is in docs/verification.md</text>
+</svg>

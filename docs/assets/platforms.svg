@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="400" viewBox="0 0 860 400" font-family="Segoe UI, -apple-system, Helvetica, Arial, sans-serif">
+<rect width="860" height="400" rx="14" fill="#0d0e12"/>
+<text x="28" y="38" fill="#ecedf0" font-size="20" font-weight="700">Wheels and CI</text>
+<text x="28" y="60" fill="#9699a2" font-size="14">one abi3 wheel per platform for CPython 3.10 and later · every cell is a CI job testing that wheel</text>
+<text x="308" y="100" fill="#9699a2" font-size="13" text-anchor="middle">CPython 3.10</text>
+<text x="424" y="100" fill="#9699a2" font-size="13" text-anchor="middle">CPython 3.11</text>
+<text x="540" y="100" fill="#9699a2" font-size="13" text-anchor="middle">CPython 3.12</text>
+<text x="656" y="100" fill="#9699a2" font-size="13" text-anchor="middle">CPython 3.13</text>
+<text x="772" y="100" fill="#9699a2" font-size="13" text-anchor="middle">CPython 3.14</text>
+<text x="28" y="137" fill="#ecedf0" font-size="15" font-weight="600">Linux x86_64</text>
+<text x="28" y="153" fill="#5f626c" font-size="12">manylinux2014</text>
+<rect x="270" y="126" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="286.0,139 290.0,143 298.0,134" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="316" y="144" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<rect x="386" y="126" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="402.0,139 406.0,143 414.0,134" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="432" y="144" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<rect x="502" y="126" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="518.0,139 522.0,143 530.0,134" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="548" y="144" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<rect x="618" y="126" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="634.0,139 638.0,143 646.0,134" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="664" y="144" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<rect x="734" y="126" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="750.0,139 754.0,143 762.0,134" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="780" y="144" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<rect x="28" y="160" width="804.0" height="1" rx="0" fill="#2a2c34"/>
+<text x="28" y="181" fill="#ecedf0" font-size="15" font-weight="600">Linux aarch64</text>
+<text x="28" y="197" fill="#5f626c" font-size="12">manylinux2014</text>
+<rect x="270" y="170" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="286.0,183 290.0,187 298.0,178" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="316" y="188" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<rect x="386" y="170" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="402.0,183 406.0,187 414.0,178" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="432" y="188" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<rect x="502" y="170" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="518.0,183 522.0,187 530.0,178" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="548" y="188" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<rect x="618" y="170" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="634.0,183 638.0,187 646.0,178" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="664" y="188" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<rect x="734" y="170" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="750.0,183 754.0,187 762.0,178" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="780" y="188" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<rect x="28" y="204" width="804.0" height="1" rx="0" fill="#2a2c34"/>
+<text x="28" y="225" fill="#ecedf0" font-size="15" font-weight="600">Windows x64</text>
+<text x="28" y="241" fill="#5f626c" font-size="12">win_amd64</text>
+<rect x="270" y="214" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="286.0,227 290.0,231 298.0,222" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="316" y="232" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<rect x="386" y="214" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="402.0,227 406.0,231 414.0,222" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="432" y="232" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<rect x="502" y="214" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="518.0,227 522.0,231 530.0,222" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="548" y="232" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<rect x="618" y="214" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="634.0,227 638.0,231 646.0,222" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="664" y="232" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<rect x="734" y="214" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="750.0,227 754.0,231 762.0,222" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="780" y="232" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<rect x="28" y="248" width="804.0" height="1" rx="0" fill="#2a2c34"/>
+<text x="28" y="269" fill="#ecedf0" font-size="15" font-weight="600">macOS arm64</text>
+<text x="28" y="285" fill="#5f626c" font-size="12">universal2 wheel</text>
+<rect x="270" y="258" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="286.0,271 290.0,275 298.0,266" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="316" y="276" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<rect x="386" y="258" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="402.0,271 406.0,275 414.0,266" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="432" y="276" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<rect x="502" y="258" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="518.0,271 522.0,275 530.0,266" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="548" y="276" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<rect x="618" y="258" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="634.0,271 638.0,275 646.0,266" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="664" y="276" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<rect x="734" y="258" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="750.0,271 754.0,275 762.0,266" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="780" y="276" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<rect x="28" y="292" width="804.0" height="1" rx="0" fill="#2a2c34"/>
+<text x="28" y="313" fill="#ecedf0" font-size="15" font-weight="600">macOS Intel</text>
+<text x="28" y="329" fill="#5f626c" font-size="12">universal2 wheel</text>
+<rect x="270" y="302" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="286.0,315 290.0,319 298.0,310" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="316" y="320" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<rect x="386" y="302" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="402.0,315 406.0,319 414.0,310" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="432" y="320" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<rect x="502" y="302" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="518.0,315 522.0,319 530.0,310" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="548" y="320" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<rect x="618" y="302" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="634.0,315 638.0,319 646.0,310" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="664" y="320" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<rect x="734" y="302" width="76.0" height="26" rx="13" fill="#16271b" stroke="#2f6b3f" stroke-width="1.2"/>
+<polyline points="750.0,315 754.0,319 762.0,310" fill="none" stroke="#7ed385" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="780" y="320" fill="#7ed385" font-size="13" text-anchor="middle">pass</text>
+<text x="28" y="362" fill="#9699a2" font-size="13">Each job runs sqlparse's test suite, the recursion check, the Django check and the package check.</text>
+<text x="28" y="384" fill="#5f626c" font-size="12">No wheels and no tests for musl (Alpine), Windows on ARM, PyPy or free-threaded CPython: pip builds from source there.</text>
+</svg>

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="190" viewBox="0 0 860 190" font-family="Segoe UI, -apple-system, Helvetica, Arial, sans-serif">
+<rect width="860" height="190" rx="14" fill="#0d0e12"/>
+<text x="28" y="38" fill="#ecedf0" font-size="20" font-weight="700">Where sqlparse's format() spends its time</text>
+<text x="28" y="60" fill="#9699a2" font-size="14">pure-Python sqlparse 0.6.1 formatting the 2.1 MB corpus, by profile (docs/profile-format.md)</text>
+<rect x="28" y="84" width="464.3" height="30" rx="6" fill="#6eaaff"/>
+<rect x="496.32" y="84" width="215.1" height="30" rx="6" fill="#be96ff"/>
+<rect x="713.4" y="84" width="70.4" height="30" rx="6" fill="#7ed385"/>
+<rect x="785.76" y="84" width="46.2" height="30" rx="6" fill="#8c8f98"/>
+<rect x="28" y="135" width="12.0" height="12" rx="3" fill="#6eaaff"/>
+<text x="48" y="146" fill="#6eaaff" font-size="15" font-weight="700">58 %</text>
+<text x="92" y="146" fill="#9699a2" font-size="13">grouping</text>
+<rect x="228" y="135" width="12.0" height="12" rx="3" fill="#be96ff"/>
+<text x="248" y="146" fill="#be96ff" font-size="15" font-weight="700">27 %</text>
+<text x="292" y="146" fill="#9699a2" font-size="13">lexing and splitting</text>
+<rect x="458" y="135" width="12.0" height="12" rx="3" fill="#7ed385"/>
+<text x="478" y="146" fill="#7ed385" font-size="15" font-weight="700">9 %</text>
+<text x="522" y="146" fill="#9699a2" font-size="13">reindent filter</text>
+<rect x="648" y="135" width="12.0" height="12" rx="3" fill="#8c8f98"/>
+<text x="668" y="146" fill="#8c8f98" font-size="15" font-weight="700">6 %</text>
+<text x="712" y="146" fill="#9699a2" font-size="13">the rest</text>
+<text x="28" y="176" fill="#5f626c" font-size="12">The port runs every grouping pass sqlparse runs, in the same order, and skips only the ones that cannot find anything.</text>
+</svg>

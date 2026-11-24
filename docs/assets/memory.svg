@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="236" viewBox="0 0 860 236" font-family="Segoe UI, -apple-system, Helvetica, Arial, sans-serif">
+<rect width="860" height="236" rx="14" fill="#0d0e12"/>
+<text x="28" y="38" fill="#ecedf0" font-size="20" font-weight="700">Memory: parsestream over 100,000 statements</text>
+<text x="28" y="60" fill="#9699a2" font-size="14">peak memory of the whole process while iterating sqlparse.parsestream over 5.5 MB of INSERTs</text>
+<text x="28" y="100" fill="#ecedf0" font-size="14">sqlparse 0.6.1</text>
+<rect x="220" y="88" width="500.0" height="16" rx="8" fill="#22242c"/>
+<rect x="220" y="88" width="68.3" height="16" rx="8" fill="#8c8f98"/>
+<text x="298.293" y="101" fill="#9699a2" font-size="14" font-weight="700">56 MB</text>
+<text x="28" y="138" fill="#ecedf0" font-size="14">sqlparse-turbo 0.1.4</text>
+<rect x="220" y="126" width="500.0" height="16" rx="8" fill="#22242c"/>
+<rect x="220" y="126" width="500.0" height="16" rx="8" fill="#e0625a"/>
+<text x="730" y="139" fill="#e0625a" font-size="14" font-weight="700">410 MB</text>
+<text x="28" y="176" fill="#ecedf0" font-size="14" font-weight="600">sqlparse-turbo 0.1.5</text>
+<rect x="220" y="164" width="500.0" height="16" rx="8" fill="#22242c"/>
+<rect x="220" y="164" width="72.0" height="16" rx="8" fill="#ff8a3d"/>
+<text x="301.951" y="177" fill="#ff8a3d" font-size="14" font-weight="700">59 MB</text>
+<text x="28" y="220" fill="#9699a2" font-size="13">0.1.5 lexes 1,024 tokens at a time and splits statements off as they are asked for; 0.1.4 lexed the whole text first.</text>
+</svg>

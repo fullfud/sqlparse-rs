@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="346" viewBox="0 0 860 346" font-family="Segoe UI, -apple-system, Helvetica, Arial, sans-serif">
+<rect width="860" height="346" rx="14" fill="#0d0e12"/>
+<text x="28" y="38" fill="#ecedf0" font-size="20" font-weight="700">The Rust alone, pass by pass</text>
+<text x="28" y="60" fill="#9699a2" font-size="14">seconds for the 2.1 MB corpus without Python, best of 3, Windows 11</text>
+<rect x="28" y="78" width="12.0" height="12" rx="3" fill="#ff8a3d"/>
+<text x="48" y="89" fill="#9699a2" font-size="13" font-family="Cascadia Mono, Consolas, Menlo, monospace">format(sql, reindent=True, keyword_case='upper')</text>
+<rect x="470" y="78" width="12.0" height="12" rx="3" fill="#6eaaff"/>
+<text x="490" y="89" fill="#9699a2" font-size="13">parse: lex, split, group</text>
+<text x="28" y="132" fill="#ecedf0" font-size="15">first port</text>
+<rect x="200" y="114" width="520.0" height="13" rx="6" fill="#ff8a3d"/>
+<text x="728" y="125" fill="#9699a2" font-size="12">0.62 s</text>
+<rect x="200" y="132" width="419.4" height="13" rx="6" fill="#6eaaff"/>
+<text x="627.355" y="143" fill="#9699a2" font-size="12">0.50 s</text>
+<text x="28" y="184" fill="#ecedf0" font-size="15">regex lexer</text>
+<rect x="200" y="166" width="402.6" height="13" rx="6" fill="#ff8a3d"/>
+<text x="610.581" y="177" fill="#9699a2" font-size="12">0.48 s</text>
+<rect x="200" y="184" width="301.9" height="13" rx="6" fill="#6eaaff"/>
+<text x="509.935" y="195" fill="#9699a2" font-size="12">0.36 s</text>
+<text x="28" y="236" fill="#ecedf0" font-size="15">fast lexer (0.1.1)</text>
+<rect x="200" y="218" width="343.9" height="13" rx="6" fill="#ff8a3d"/>
+<text x="551.871" y="229" fill="#9699a2" font-size="12">0.41 s</text>
+<rect x="200" y="236" width="251.6" height="13" rx="6" fill="#6eaaff"/>
+<text x="459.613" y="247" fill="#9699a2" font-size="12">0.30 s</text>
+<text x="28" y="288" fill="#ff8a3d" font-size="15" font-weight="700">0.1.2</text>
+<rect x="200" y="270" width="168.6" height="13" rx="6" fill="#ff8a3d"/>
+<text x="376.581" y="281" fill="#9699a2" font-size="12">0.201 s</text>
+<rect x="200" y="288" width="105.7" height="13" rx="6" fill="#6eaaff"/>
+<text x="313.677" y="299" fill="#9699a2" font-size="12">0.126 s</text>
+<text x="28" y="330" fill="#5f626c" font-size="12">Each step was checked equal to sqlparse before the next; how: docs/internals.md</text>
+</svg>
