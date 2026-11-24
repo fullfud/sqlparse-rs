@@ -454,6 +454,36 @@ impl Statements {
         Ok(Some((statement, grouped.filtered(), last_func)))
     }
 
+    /// `next(aligned)` for django-debug-toolbar's stack (an `AlignedIndentFilter`, its `BoldKeywordFilter`, its
+    /// `EscapedStringSerializer`): the statement's HTML as those leave it, when the `AlignedIndentFilter` was
+    /// run here; else what `next` gives, for the Python filters to run on.
+    fn next_html<'py>(
+        &mut self,
+        py: Python<'py>,
+        aligned: port::AlignedState,
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let objects = SQL_OBJECTS.get().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("statements: set_sql_objects was not called")
+        })?;
+        let Some(grouped) = self.0.next(Some(aligned), None).map_err(error)? else {
+            return Ok(None);
+        };
+        if grouped.filtered() {
+            return Ok(Some(
+                pyo3::types::PyString::new(py, &grouped.toolbar_html()).into_any(),
+            ));
+        }
+        let (statement, last_func) = gc_paused(py, || grouped.to_python(py, objects))?;
+        let filtered = pyo3::types::PyBool::new(py, false).to_owned().into_any();
+        let last = match last_func {
+            Some(o) => o,
+            None => py.None().into_bound(py),
+        };
+        Ok(Some(
+            pyo3::types::PyTuple::new(py, [statement, filtered, last])?.into_any(),
+        ))
+    }
+
     /// Takes the next statement without grouping it, for a stack whose grouping was turned off since the
     /// first statement (`last_tokens` then gives it); false after the last.
     fn skip(&mut self) -> bool {
@@ -468,6 +498,43 @@ impl Statements {
         })?;
         let mut items = Vec::new();
         for (ttype, value) in self.0.last_tokens() {
+            let t = types
+                .get(ttype)
+                .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(ttype))?;
+            items.push(PyTuple::new(
+                py,
+                [t.bind(py).clone(), PyString::new(py, value).into_any()],
+            )?);
+        }
+        pyo3::types::PyList::new(py, items)
+    }
+}
+
+/// `toolbar_simplified`: django-debug-toolbar's simplified SQL of a text (see `port::Simplified`).
+#[pyfunction]
+#[pyo3(name = "toolbar_simplified", signature = (sql))]
+fn toolbar_simplified(sql: String) -> ToolbarSimplified {
+    ToolbarSimplified(port::Simplified::new(sql))
+}
+
+#[pyclass(name = "ToolbarSimplified", module = "sqlparse_turbo._native")]
+struct ToolbarSimplified(port::Simplified);
+
+#[pymethods]
+impl ToolbarSimplified {
+    /// Each statement's HTML, as the toolbar's filters leave it.
+    fn html(&self) -> Vec<String> {
+        self.0.html()
+    }
+
+    /// The tokens of statement `i` as (token type object, text) pairs, as sqlparse's splitter has them.
+    fn tokens<'py>(&self, py: Python<'py>, i: usize) -> PyResult<Bound<'py, pyo3::types::PyList>> {
+        use pyo3::types::{PyString, PyTuple};
+        let types = TOKEN_TYPES.get().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("tokens: set_token_types was not called")
+        })?;
+        let mut items = Vec::new();
+        for (ttype, value) in self.0.tokens(i) {
             let t = types
                 .get(ttype)
                 .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(ttype))?;
@@ -688,6 +755,8 @@ fn native_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(untouched, m)?)?;
     m.add_function(wrap_pyfunction!(drifted, m)?)?;
     m.add_function(wrap_pyfunction!(statements, m)?)?;
+    m.add_function(wrap_pyfunction!(toolbar_simplified, m)?)?;
+    m.add_class::<ToolbarSimplified>()?;
     m.add_function(wrap_pyfunction!(objects_direct, m)?)?;
     m.add_function(wrap_pyfunction!(watch_callback, m)?)?;
     m.add_function(wrap_pyfunction!(watcher, m)?)?;

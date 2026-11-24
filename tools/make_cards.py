@@ -171,11 +171,11 @@ def calls():
     # docs/benchmarks.md, "Other ways into sqlparse": 400 query files, CPython 3.13, best of 3, with install().
     rows = [
         ("format(sql.encode(), keyword_case='upper')", 'bytes in, 400 files', 87, '1.08 s → 0.012 s'),
+        ("django-debug-toolbar's SQL panel", 'its own filter stacks, 400 queries', 62, '4.89 s → 0.079 s'),
         ('format(sql, reindent=True)', 'one short ORM query', 58, '233 µs → 4 µs'),
         ('split(sql)', 'one short ORM query', 42, '55 µs → 1.3 µs'),
         ('FilterStack.run, own stack with a ReindentFilter', '400 files', 15.5, '3.69 s → 0.24 s'),
         ('sqlparse.parsestream(io.StringIO(sql))', '400 files', 8.6, '3.34 s → 0.39 s'),
-        ("django-debug-toolbar's SQL panel", 'its own filter stack, 400 queries', 5.8, '4.70 s → 0.81 s'),
     ]
     top, rh = 84, 60
     s = Svg(860, top + rh * len(rows) + 34, 'Every way into sqlparse',

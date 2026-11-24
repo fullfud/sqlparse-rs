@@ -8,35 +8,35 @@
 <rect x="28" y="110" width="470.0" height="14" rx="7" fill="#ff8a3d"/>
 <text x="512" y="122" fill="#ff8a3d" font-size="14" font-weight="700">87x faster</text>
 <text x="612" y="122" fill="#5f626c" font-size="12">bytes in, 400 files</text>
-<text x="28" y="160" fill="#ecedf0" font-size="14" font-family="Cascadia Mono, Consolas, Menlo, monospace">format(sql, reindent=True)</text>
-<text x="832" y="160" fill="#9699a2" font-size="13" text-anchor="end">233 µs → 4 µs</text>
+<text x="28" y="160" fill="#ecedf0" font-size="14" font-family="Cascadia Mono, Consolas, Menlo, monospace">django-debug-toolbar's SQL panel</text>
+<text x="832" y="160" fill="#9699a2" font-size="13" text-anchor="end">4.89 s → 0.079 s</text>
 <rect x="28" y="170" width="470.0" height="14" rx="7" fill="#22242c"/>
-<rect x="28" y="170" width="313.3" height="14" rx="7" fill="#ff8a3d"/>
-<text x="512" y="182" fill="#ff8a3d" font-size="14" font-weight="700">58x faster</text>
-<text x="612" y="182" fill="#5f626c" font-size="12">one short ORM query</text>
-<text x="28" y="220" fill="#ecedf0" font-size="14" font-family="Cascadia Mono, Consolas, Menlo, monospace">split(sql)</text>
-<text x="832" y="220" fill="#9699a2" font-size="13" text-anchor="end">55 µs → 1.3 µs</text>
+<rect x="28" y="170" width="334.9" height="14" rx="7" fill="#ff8a3d"/>
+<text x="512" y="182" fill="#ff8a3d" font-size="14" font-weight="700">62x faster</text>
+<text x="612" y="182" fill="#5f626c" font-size="12">its own filter stacks, 400 queries</text>
+<text x="28" y="220" fill="#ecedf0" font-size="14" font-family="Cascadia Mono, Consolas, Menlo, monospace">format(sql, reindent=True)</text>
+<text x="832" y="220" fill="#9699a2" font-size="13" text-anchor="end">233 µs → 4 µs</text>
 <rect x="28" y="230" width="470.0" height="14" rx="7" fill="#22242c"/>
-<rect x="28" y="230" width="226.9" height="14" rx="7" fill="#ff8a3d"/>
-<text x="512" y="242" fill="#ff8a3d" font-size="14" font-weight="700">42x faster</text>
+<rect x="28" y="230" width="313.3" height="14" rx="7" fill="#ff8a3d"/>
+<text x="512" y="242" fill="#ff8a3d" font-size="14" font-weight="700">58x faster</text>
 <text x="612" y="242" fill="#5f626c" font-size="12">one short ORM query</text>
-<text x="28" y="280" fill="#ecedf0" font-size="14" font-family="Cascadia Mono, Consolas, Menlo, monospace">FilterStack.run, own stack with a ReindentFilter</text>
-<text x="832" y="280" fill="#9699a2" font-size="13" text-anchor="end">3.69 s → 0.24 s</text>
+<text x="28" y="280" fill="#ecedf0" font-size="14" font-family="Cascadia Mono, Consolas, Menlo, monospace">split(sql)</text>
+<text x="832" y="280" fill="#9699a2" font-size="13" text-anchor="end">55 µs → 1.3 µs</text>
 <rect x="28" y="290" width="470.0" height="14" rx="7" fill="#22242c"/>
-<rect x="28" y="290" width="83.7" height="14" rx="7" fill="#ff8a3d"/>
-<text x="512" y="302" fill="#ff8a3d" font-size="14" font-weight="700">15.5x faster</text>
-<text x="612" y="302" fill="#5f626c" font-size="12">400 files</text>
-<text x="28" y="340" fill="#ecedf0" font-size="14" font-family="Cascadia Mono, Consolas, Menlo, monospace">sqlparse.parsestream(io.StringIO(sql))</text>
-<text x="832" y="340" fill="#9699a2" font-size="13" text-anchor="end">3.34 s → 0.39 s</text>
+<rect x="28" y="290" width="226.9" height="14" rx="7" fill="#ff8a3d"/>
+<text x="512" y="302" fill="#ff8a3d" font-size="14" font-weight="700">42x faster</text>
+<text x="612" y="302" fill="#5f626c" font-size="12">one short ORM query</text>
+<text x="28" y="340" fill="#ecedf0" font-size="14" font-family="Cascadia Mono, Consolas, Menlo, monospace">FilterStack.run, own stack with a ReindentFilter</text>
+<text x="832" y="340" fill="#9699a2" font-size="13" text-anchor="end">3.69 s → 0.24 s</text>
 <rect x="28" y="350" width="470.0" height="14" rx="7" fill="#22242c"/>
-<rect x="28" y="350" width="46.5" height="14" rx="7" fill="#ff8a3d"/>
-<text x="512" y="362" fill="#ff8a3d" font-size="14" font-weight="700">8.6x faster</text>
+<rect x="28" y="350" width="83.7" height="14" rx="7" fill="#ff8a3d"/>
+<text x="512" y="362" fill="#ff8a3d" font-size="14" font-weight="700">15.5x faster</text>
 <text x="612" y="362" fill="#5f626c" font-size="12">400 files</text>
-<text x="28" y="400" fill="#ecedf0" font-size="14" font-family="Cascadia Mono, Consolas, Menlo, monospace">django-debug-toolbar's SQL panel</text>
-<text x="832" y="400" fill="#9699a2" font-size="13" text-anchor="end">4.70 s → 0.81 s</text>
+<text x="28" y="400" fill="#ecedf0" font-size="14" font-family="Cascadia Mono, Consolas, Menlo, monospace">sqlparse.parsestream(io.StringIO(sql))</text>
+<text x="832" y="400" fill="#9699a2" font-size="13" text-anchor="end">3.34 s → 0.39 s</text>
 <rect x="28" y="410" width="470.0" height="14" rx="7" fill="#22242c"/>
-<rect x="28" y="410" width="31.3" height="14" rx="7" fill="#ff8a3d"/>
-<text x="512" y="422" fill="#ff8a3d" font-size="14" font-weight="700">5.8x faster</text>
-<text x="612" y="422" fill="#5f626c" font-size="12">its own filter stack, 400 queries</text>
+<rect x="28" y="410" width="46.5" height="14" rx="7" fill="#ff8a3d"/>
+<text x="512" y="422" fill="#ff8a3d" font-size="14" font-weight="700">8.6x faster</text>
+<text x="612" y="422" fill="#5f626c" font-size="12">400 files</text>
 <text x="28" y="462" fill="#5f626c" font-size="12">How each was measured: docs/benchmarks.md</text>
 </svg>

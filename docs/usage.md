@@ -67,7 +67,8 @@ objects. It runs only for the default lexer as sqlparse sets it up and a `str` t
   them, one at a time as sqlparse's run does.
 - A first statement filter that is sqlparse's own `AlignedIndentFilter` or `ReindentFilter` runs in Rust too,
   from the instance's state. The instance is left as sqlparse's would be (`_last_stmt`, `_last_func`).
-- The stack's other statement filters and its serializers run in Python.
+- The stack's other statement filters and its serializers run in Python, except django-debug-toolbar's own,
+  which run in Rust as well ([Django](django.md)).
 - Any other stack runs as sqlparse's.
 
 ## `parsestream`

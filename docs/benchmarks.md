@@ -61,7 +61,7 @@ Two more, on the 400 query files:
 
 ## Other ways into sqlparse
 
-![Speed-ups with install(): format of bytes 87x, format of one short ORM query 58x, split of one short query 42x, FilterStack.run with a ReindentFilter 15.5x, parsestream 8.6x, django-debug-toolbar's SQL panel 5.8x.](assets/calls.svg)
+![Speed-ups with install(): format of bytes 87x, django-debug-toolbar's SQL panel 62x, format of one short ORM query 58x, split of one short query 42x, FilterStack.run with a ReindentFilter 15.5x, parsestream 8.6x.](assets/calls.svg)
 
 With `install()`, the same 400 query files, CPython 3.13, best of 3:
 
@@ -70,11 +70,11 @@ With `install()`, the same 400 query files, CPython 3.13, best of 3:
 | `format(sql.encode(), keyword_case='upper')`, bytes in | 1.08 s | 0.012 s | **87x** |
 | `sqlparse.parsestream(io.StringIO(sql))` | 3.34 s | 0.39 s | **8.6x** |
 | `FilterStack.run`, a stack of the caller's own with a `ReindentFilter` | 3.69 s | 0.24 s | **15.5x** |
-| django-debug-toolbar's SQL panel (its own stack, `AlignedIndentFilter`) | 4.70 s | 0.81 s | **5.8x** |
+| django-debug-toolbar's SQL panel (its own two stacks, its own filters) | 4.89 s | 0.079 s | **62x** |
 | `format(sql, reindent=True)` on a short ORM query, one call | 233 µs | 4 µs | **58x** |
 | `split(sql)` on a short ORM query, one call | 55 µs | 1.3 µs | **42x** |
 
-The toolbar's panel gains less because its own keyword filter and serializer still run in Python
+The toolbar's panel runs its own filters in Rust too, when they are the code the Rust reproduces
 ([Django](django.md)).
 
 ## `parse` and the garbage collector

@@ -23,7 +23,7 @@ pub(crate) fn is_a(ttype: &str, parent: &str) -> bool {
 }
 
 /// `value.upper() == word` for an upper-case ASCII `word`, without allocating for ASCII values.
-fn upper_is(value: &str, word: &str) -> bool {
+pub(crate) fn upper_is(value: &str, word: &str) -> bool {
     if value.is_ascii() {
         value.eq_ignore_ascii_case(word)
     } else {

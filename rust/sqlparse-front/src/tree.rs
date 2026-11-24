@@ -327,6 +327,37 @@ pub(crate) mod w {
 /// The statement, root of every tree.
 pub(crate) const ROOT: Id = 0;
 
+/// `T.Other`: no lexer rule or filter of sqlparse's makes it, django-debug-toolbar's filters do.
+pub(crate) const TOOLBAR_OTHER: &str = "Token.Other";
+
+/// One leaf as django-debug-toolbar's filters write it: `escaped_value(token)` (the value as is for a token of
+/// type exactly `T.Other` or `T.Whitespace`, else `html.escape(value, quote=False)`), between `<strong>` and
+/// `</strong>` when `BoldKeywordFilter` saw `is_keyword` on it.
+pub(crate) fn toolbar_token(is_keyword: bool, plain: bool, value: &str, out: &mut String) {
+    if is_keyword {
+        out.push_str("<strong>");
+    }
+    if plain {
+        out.push_str(value);
+    } else {
+        // html.escape(s, quote=False): & first, then < and >; one pass gives the same
+        let mut rest = value;
+        while let Some(i) = rest.find(['&', '<', '>']) {
+            out.push_str(&rest[..i]);
+            out.push_str(match rest.as_bytes()[i] {
+                b'&' => "&amp;",
+                b'<' => "&lt;",
+                _ => "&gt;",
+            });
+            rest = &rest[i + 1..];
+        }
+        out.push_str(rest);
+    }
+    if is_keyword {
+        out.push_str("</strong>");
+    }
+}
+
 /// `a == b` for two token type names. They all start with `Token.`, so two of the same length almost always
 /// differ in their last bytes: those are compared first, as one word, before the whole names.
 #[inline]
@@ -702,6 +733,18 @@ impl Tree {
                     out.push_str(self.value(c));
                 }
             }
+        }
+    }
+
+    /// What django-debug-toolbar's `BoldKeywordFilter` and then its `EscapedStringSerializer` make of the
+    /// statement (see `toolbar_token`): `BoldKeywordFilter` walks every token list down from the statement and
+    /// puts `<strong>` and `</strong>` (`T.Other` tokens) right before and after each token whose `is_keyword`
+    /// was set when it was made; the serializer joins the leaves of `stmt.flatten()`.
+    pub(crate) fn toolbar_html(&self, out: &mut String) {
+        for leaf in self.flatten(ROOT) {
+            let n = &self.n[leaf];
+            let plain = self.ttype_is(leaf, tt::WHITESPACE) || n.ttype == Some(TOOLBAR_OTHER);
+            toolbar_token(n.is_keyword, plain, self.value(leaf), out);
         }
     }
 

@@ -3,6 +3,13 @@
 Every version runs in Rust with sqlparse 0.6.1 and gives sqlparse's answers. Each change below was checked equal to
 sqlparse before release ([Verification](verification.md)).
 
+## 0.1.7 (2026-11-24)
+
+- **django-debug-toolbar's SQL panel 62x faster** (was 5.8x): its own filters (`ElideSelectListsFilter`,
+  `BoldKeywordFilter`, `EscapedStringSerializer`) run in Rust too, for both the formatted and the collapsed
+  SQL, when they are the code django-debug-toolbar 4.1 to 8.0 ship. A page of 200 queries through the toolbar
+  loads 3.3x faster (was 2.4x). Checked in CI by `tools/check_toolbar.py`.
+
 ## 0.1.6 (2026-11-24)
 
 - Documentation only, the code is 0.1.5's: a short README with pictures (also on PyPI), the details in

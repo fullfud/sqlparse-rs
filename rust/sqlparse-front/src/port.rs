@@ -304,6 +304,141 @@ impl Grouped {
         self.filtered
     }
 
+    /// The statement as django-debug-toolbar's `BoldKeywordFilter` and `EscapedStringSerializer` leave it,
+    /// after the first filter ran here. Those take a Python frame a level (`process`, `flatten`) and a few more:
+    /// fewer than the `AlignedIndentFilter` that ran here, whose limits already held.
+    pub fn toolbar_html(&self) -> String {
+        let mut out = String::with_capacity(self.tree.value(tree::ROOT).len() * 2);
+        self.tree.toolbar_html(&mut out);
+        out
+    }
+}
+
+/// django-debug-toolbar's `ElideSelectListsFilter` puts this, as `T.Other`, where it leaves out a select list.
+const ELIDED: &str = " \u{2022}\u{2022}\u{2022} ";
+/// The start of [`ELIDED`]'s token: it is not in the text.
+const NOT_IN_TEXT: usize = usize::MAX;
+
+/// django-debug-toolbar's simplified SQL: a `FilterStack` without grouping whose token stream goes through its
+/// `ElideSelectListsFilter`, then sqlparse's splitter, then its `BoldKeywordFilter` and
+/// `EscapedStringSerializer` on each statement.
+pub struct Simplified {
+    text: String,
+    /// The tokens past the filter, as (type, start, end) in `text`; [`ELIDED`]'s start is [`NOT_IN_TEXT`].
+    tokens: Vec<(&'static str, usize, usize)>,
+    statements: Vec<std::ops::Range<usize>>,
+}
+
+impl Simplified {
+    pub fn new(text: String) -> Simplified {
+        let base = text.as_ptr() as usize;
+        let lexed: Vec<(&'static str, usize, usize)> = lexer::tokenize(&text)
+            .into_iter()
+            .map(|(ttype, value)| {
+                let start = value.as_ptr() as usize - base;
+                (ttype, start, start + value.len())
+            })
+            .collect();
+        let value = |&(_, a, b): &(&'static str, usize, usize)| &text[a..b];
+        let keyword = |t: &(&'static str, usize, usize), word: &str| {
+            split::is_a(t.0, "Token.Keyword") && split::upper_is(value(t), word)
+        };
+        // ElideSelectListsFilter.process, and elide_until_from on the same stream
+        let mut tokens = Vec::with_capacity(lexed.len());
+        let mut allow_elision = true;
+        let mut i = 0;
+        while i < lexed.len() {
+            let t = lexed[i];
+            i += 1;
+            tokens.push(t);
+            if !split::is_a(t.0, "Token.Keyword") {
+                continue;
+            }
+            if allow_elision && keyword(&t, "SELECT") {
+                let mut has_dot = false;
+                let mut saved = Vec::new();
+                while i < lexed.len() {
+                    let u = lexed[i];
+                    i += 1;
+                    if keyword(&u, "FROM") {
+                        if has_dot {
+                            tokens.push((tree::TOOLBAR_OTHER, NOT_IN_TEXT, NOT_IN_TEXT));
+                        } else {
+                            tokens.append(&mut saved);
+                        }
+                        tokens.push(u);
+                        break;
+                    }
+                    if !has_dot {
+                        if split::is_a(u.0, "Token.Punctuation") && value(&u) == "." {
+                            has_dot = true;
+                        } else {
+                            saved.push(u);
+                        }
+                    }
+                }
+                // a select list with no FROM after it: the saved tokens are never given
+            }
+            allow_elision = ["EXCEPT", "INTERSECT", "UNION"]
+                .iter()
+                .any(|w| split::upper_is(value(&t), w));
+        }
+        let mut out = Simplified {
+            text,
+            tokens,
+            statements: Vec::new(),
+        };
+        out.statements = split::statements(&out.view(0..out.tokens.len()));
+        out
+    }
+
+    fn view(&self, range: std::ops::Range<usize>) -> Vec<(&'static str, &str)> {
+        self.tokens[range]
+            .iter()
+            .map(|&(ttype, a, b)| {
+                (
+                    ttype,
+                    if a == NOT_IN_TEXT {
+                        ELIDED
+                    } else {
+                        &self.text[a..b]
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Each statement as the toolbar's filters leave it (the stack's run without grouping makes the statement of
+    /// the splitter's tokens, so every token is a leaf of the statement).
+    pub fn html(&self) -> Vec<String> {
+        self.statements
+            .iter()
+            .map(|range| {
+                let mut out = String::new();
+                for (ttype, value) in self.view(range.clone()) {
+                    let plain = ttype == "Token.Text.Whitespace" || ttype == tree::TOOLBAR_OTHER;
+                    tree::toolbar_token(
+                        split::is_a(ttype, "Token.Keyword"),
+                        plain,
+                        value,
+                        &mut out,
+                    );
+                }
+                out
+            })
+            .collect()
+    }
+
+    /// The tokens of statement `i`, as the splitter has them.
+    pub fn tokens(&self, i: usize) -> Vec<(&'static str, &str)> {
+        match self.statements.get(i) {
+            Some(range) => self.view(range.clone()),
+            None => Vec::new(),
+        }
+    }
+}
+
+impl Grouped {
     /// The statement as sqlparse's own objects (see [`Parsed::to_python`]), and the object the caller's
     /// `ReindentFilter._last_func` was set to here, if it was.
     pub fn to_python<'py>(

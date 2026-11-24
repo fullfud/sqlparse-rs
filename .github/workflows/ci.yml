@@ -141,6 +141,10 @@ jobs:
         run: |
           python -m pip install django
           python -X utf8 tools/check_django.py
+      - name: django-debug-toolbar's SQL panel
+        run: |
+          python -m pip install django-debug-toolbar
+          python -X utf8 tools/check_toolbar.py
       - name: Package against sqlparse (quick)
         if: matrix.os != 'ubuntu-latest'
         run: python -X utf8 tools/check_package.py --quick

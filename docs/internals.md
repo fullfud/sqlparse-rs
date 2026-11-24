@@ -140,6 +140,16 @@ A gotcha found on the way: a second call site of the lexer's helpers made the co
 whole-text loop, which cost `split` 10 % and `format` 7 %. There is one lexer loop function now, called with a
 token budget, and both run as fast as in 0.1.4.
 
+### django-debug-toolbar's filters
+
+After 0.1.4 the toolbar's panel was still 5.8x: the Rust grouped and aligned, but the toolbar's
+`BoldKeywordFilter` walked the Python objects, its serializer flattened them and escaped every token, and the
+collapsed view ran entirely in Python (its `ElideSelectListsFilter` on the token stream, then sqlparse's
+splitter). Those filters are small and the same in every toolbar from 4.1 to 8.0, so the Rust now does them
+too and returns each statement's HTML: no Python objects are made at all. The package runs them only after
+checking that the loaded functions were compiled from exactly that source (once), and on every call that
+nothing was replaced since. Panel: 4.89 s → 0.079 s on the corpus.
+
 ### What is left
 
 No single hot spot is left: the time is spread over the grouping passes that do run, the lexer and the indent

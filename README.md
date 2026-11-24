@@ -43,7 +43,7 @@ sqlformat-turbo -r -k upper query.sql      # sqlparse's own `sqlformat` command,
 ```
 
 **Django:** add `"sqlparse_turbo.django"` to `INSTALLED_APPS`. Migrations, `sqlmigrate`, the test runner and
-django-debug-toolbar then run in Rust; the toolbar's SQL panel is 5.8x faster. [More][django]
+django-debug-toolbar then run in Rust; the toolbar's SQL panel is 62x faster. [More][django]
 
 Everything else, `install()`, `FilterStack.run`, bytes and streams: [Usage][usage].
 
@@ -54,7 +54,7 @@ Everything else, `install()`, `FilterStack.run`, bytes and streams: [Usage][usag
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/fullfud/sqlparse-turbo/main/docs/assets/calls.svg" alt="Speed-ups with install(): format of bytes 87x, format of one short ORM query 58x, split of one short query 42x, FilterStack.run with a ReindentFilter 15.5x, parsestream 8.6x, django-debug-toolbar's SQL panel 5.8x." width="760">
+  <img src="https://raw.githubusercontent.com/fullfud/sqlparse-turbo/main/docs/assets/calls.svg" alt="Speed-ups with install(): format of bytes 87x, django-debug-toolbar's SQL panel 62x, format of one short ORM query 58x, split of one short query 42x, FilterStack.run with a ReindentFilter 15.5x, parsestream 8.6x." width="760">
 </p>
 
 Measure it on your machine in a few seconds with [`bench/quick_speed.py`][quick]:
