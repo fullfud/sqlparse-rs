@@ -3,7 +3,7 @@
 Every version runs in Rust with sqlparse 0.6.1 and gives sqlparse's answers. Each change below was checked equal to
 sqlparse before release ([Verification](verification.md)).
 
-## Unreleased
+## 0.1.8 (2026-11-24)
 
 - **`str()` of a statement in Rust** on CPython 3.12+: sqlparse's `TokenList.__str__` reads the leaves straight
   from the objects (checked by `tools/check_str.py`). `[str(s) for s in parsestream(...)]` 18.6x → 23x.
