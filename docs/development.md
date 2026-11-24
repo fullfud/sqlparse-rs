@@ -45,7 +45,10 @@ except those that change only Markdown or `docs/`:
 
 1. the Rust: fmt, clippy, tests;
 2. the wheels for each platform, and the source distribution;
-3. the tests: 5 platforms x CPython 3.10-3.14, each from the built wheel;
+3. the tests: 5 platforms x CPython 3.10-3.14, each from the built wheel. Each job runs
+   [`tools/check_parallel.py`](../tools/check_parallel.py), which runs every check side by side on the
+   runner's cores, the long ones cut in shares (`CHECK_SHARD=i/n`); ubuntu-latest runs the whole package check
+   (`--whole --core`), the others its quick cut. The same command checks everything locally;
 4. the package with other sqlparse versions (0.4.4, 0.5.3, 0.6.0).
 
 A release is a `v*` tag. The same jobs run, then the `publish` job uploads to PyPI by trusted publishing (no token

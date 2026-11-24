@@ -108,7 +108,8 @@ jobs:
       fail-fast: false
       matrix:
         # ubuntu-latest also runs the whole package check (every corpus file, every code point) and the checks of
-        # the Rust core against the front door; the others run the package check's quick cut.
+        # the Rust core against the front door; the others run the package check's quick cut. tools/check_parallel.py
+        # runs them on all of the runner's cores.
         os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-latest, macos-15-intel]
         python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     defaults:
@@ -128,37 +129,16 @@ jobs:
           path: dist
       - name: Install the wheel
         run: |
-          python -m pip install sqlparse==0.6.1 pytest
+          python -m pip install sqlparse==0.6.1 pytest django django-debug-toolbar
           python -m pip install --no-index --find-links dist sqlparse-turbo
-          python -c "import sqlparse_turbo, sqlparse, sys, unicodedata; print(sqlparse_turbo._native.__file__, sqlparse.__version__, sys.version, 'Unicode', unicodedata.unidata_version)"
+          python -c "import sqlparse_turbo, sqlparse, sys, unicodedata, os; print(sqlparse_turbo._native.__file__, sqlparse.__version__, sys.version, 'Unicode', unicodedata.unidata_version, 'cores', os.cpu_count())"
       - name: Corpus
         run: python bench/gen_corpus.py
-      - name: sqlparse's test suite through the package
-        run: python -X utf8 tools/run_upstream_package.py
-      - name: Recursion limit
-        run: python -X utf8 tools/check_recursion.py package
-      - name: Django app
-        run: |
-          python -m pip install django
-          python -X utf8 tools/check_django.py
-      - name: django-debug-toolbar's SQL panel
-        run: |
-          python -m pip install django-debug-toolbar
-          python -X utf8 tools/check_toolbar.py
-      - name: str() of statements, serializer stacks
-        run: python -X utf8 tools/check_str.py
-      - name: Package against sqlparse (quick)
-        if: matrix.os != 'ubuntu-latest'
-        run: python -X utf8 tools/check_package.py --quick
-      - name: Package against sqlparse (whole)
-        if: matrix.os == 'ubuntu-latest'
-        run: python -X utf8 tools/check_package.py
-      - name: Rust core against the front door
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          export PYD=$(python -c "import sqlparse_turbo._native as m; print(m.__file__)")
-          python -X utf8 tools/check_tokenize.py
-          python -X utf8 tools/check_tree.py quick
+      # sqlparse's test suite through the package, the recursion limit, the Django app, django-debug-toolbar's
+      # panel, str() of statements and the package against sqlparse, side by side on every core (the long ones cut
+      # in shares); ubuntu-latest runs the whole package check and the Rust core against the front door
+      - name: Checks
+        run: python -X utf8 tools/check_parallel.py ${{ matrix.os == 'ubuntu-latest' && '--whole --core' || '' }}
 
   other-sqlparse:
     name: With sqlparse ${{ matrix.sqlparse }} (all calls to sqlparse)

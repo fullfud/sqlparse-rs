@@ -8,6 +8,9 @@
 --quick takes every 8th corpus file and every 8th chunk of code points (CI runs it on every OS x Python and
 the whole check once).
 
+CHECK_SHARD=i/n in the environment runs only the i-th of n shares (from 0) of the long parts' inputs (corpus,
+unicode, lexswap, stacks, read): tools/check_parallel.py runs the shares side by side, on every core.
+
 1. The benchmark corpus through the option sets people use, and split(): same result or same exception (class
    and message), with every call run in Rust.
 2. Calls outside what was ported: each must give sqlparse's own answer and must not reach the Rust.
@@ -48,6 +51,12 @@ NATIVE = {sqlparse_turbo._native.format: 'format', sqlparse_turbo._native.split:
           sqlparse_turbo._native.lex: 'lex', sqlparse_turbo._native.split_many: 'split_many',
           sqlparse_turbo._native.parse: 'parse', sqlparse_turbo._native.statements: 'parse'}
 counts = {'format': 0, 'split': 0, 'lex': 0, 'split_many': 0, 'parse': 0}
+SHARD = tuple(int(x) for x in os.environ.get('CHECK_SHARD', '0/1').split('/'))
+
+
+def mine(items):
+    """This share of `items` (all of them without CHECK_SHARD)."""
+    return list(items)[SHARD[0]::SHARD[1]]
 
 
 def hook(frame, event, arg):
@@ -119,6 +128,7 @@ def corpus():
     texts = [open(p, encoding='utf-8').read() for p in paths[::8 if QUICK else 1]]
     texts += ['', ';', 'select 1; select 2;', "select 'unclosed", 'BEGIN ' * 990 + 'END ' * 990,
               'select a ' + 'between ' * 980]
+    texts = mine(texts)
     before = native_calls()
     n = uncounted = 0
     t_py = t_rs = 0.0
@@ -312,7 +322,7 @@ def unicode_sweep():
                {'identifier_case': 'capitalize', 'reindent': True}]
     n = ran = lexed = 0
     t0 = time.perf_counter()
-    for i in range(0, len(ported), 320 if QUICK else 40):
+    for i in mine(range(0, len(ported), 320 if QUICK else 40)):
         chunk = ''.join(ported[i:i + 40])
         for ctx in contexts:
             text = ctx.replace('{}', chunk)
@@ -328,7 +338,7 @@ def unicode_sweep():
         print(f'UNICODE NOT ALL IN RUST: format {ran} of {n}, lexer {lexed} of {n // len(options)}')
         bad += 1
     leaked = 0
-    for cp in sorted(drifted)[::max(1, len(drifted) // 3000)]:
+    for cp in mine(sorted(drifted)[::max(1, len(drifted) // 3000)]):
         text = f'select a{chr(cp)}b from t'
         before = native_calls()
         b = outcome(sqlparse_turbo.format, text, keyword_case='upper')
@@ -340,7 +350,8 @@ def unicode_sweep():
     if leaked:
         print(f'UNICODE DRIFT REACHED RUST {leaked} times')
         bad += 1
-    print(f'unicode {version}: {len(ported)} code points in {n} calls in Rust, {len(drifted)} drifted ones '
+    share = f' (share {SHARD[0] + 1} of {SHARD[1]})' if SHARD[1] > 1 else ''
+    print(f'unicode {version}{share}: {len(ported)} code points in {n} calls in Rust, {len(drifted)} drifted ones '
           f'left to sqlparse, {time.perf_counter() - t0:.0f} s')
 
 
@@ -419,6 +430,7 @@ def lexer_swap():
     for _ in range(300 if QUICK else 3000):
         texts.append(''.join(r.choice(pieces) + r.choice([' ', '', '\n']) for _ in range(r.randint(1, 40))))
     texts += ['', ' ', 'select $$a$$ /* c */ --x\n$t$b$t$', "select 'unclosed", 'BEGIN ' * 120 + 'END ' * 120]
+    texts = mine(texts)
     if not sqlparse_turbo._native.objects_direct():  # the trees below are made the direct way
         print('sqlparse objects not made directly (slots layout not found)')
         bad_add()
@@ -562,6 +574,7 @@ def stacks():
     texts = [open(p, encoding='utf-8').read() for p in paths]
     texts += ['', ' ', 'select 1;select 2; ;', "select 'unclosed", '/* c */ select a from b -- x',
               'BEGIN ' * 120 + 'END ' * 120, 'select a ' + 'between ' * 60, 'sélect ñ from 表']
+    texts = mine(texts)
 
     class Bold:  # a caller's own statement filter, as the toolbar's BoldKeywordFilter
         def process(self, stmt):
@@ -733,6 +746,7 @@ def read_inputs():
     paths = sorted(glob.glob(os.path.join(ROOT, 'bench', 'corpus', '*.sql')))[::16 if QUICK else 2]
     texts = [open(p, encoding='utf-8').read() for p in paths]
     texts += ['', 'select 1; select 2', 'sélect ñ from 表 -- é', 'BEGIN ' * 120 + 'END ' * 120]
+    texts = mine(texts)
     forms = [
         ('bytes', lambda t: (t.encode(), None), True),
         ('bytes latin-1', lambda t: (t.encode('latin-1', 'replace'), 'latin-1'), True),

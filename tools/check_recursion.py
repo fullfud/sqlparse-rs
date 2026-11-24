@@ -8,6 +8,8 @@ indent filters' `_next_token` over long BETWEEN chains only stop at the interpre
 FilterStack turns into SQLParseError('Maximum recursion depth exceeded'). The port reads the caller's stack
 depth and models the frames sqlparse would use; this finds Python's threshold for each shape (binary search)
 and checks that the port fails from exactly the same size, called from several stack depths.
+
+CHECK_SHARD=i/n in the environment runs only the i-th of n shares (from 0) of the shapes (tools/check_parallel.py).
 """
 import glob, importlib.util, os, sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -19,6 +21,7 @@ if sys.argv[1:] != ['package']:  # the front door's bindings (PYD= to pick a bui
 NAMES = ['keyword_case', 'identifier_case', 'strip_comments', 'use_space_around_operators', 'strip_whitespace',
          'truncate_strings', 'truncate_char', 'reindent', 'reindent_aligned', 'indent_columns', 'indent_after_first',
          'indent_tabs', 'indent_width', 'wrap_after', 'comma_first', 'compact', 'right_margin', 'output_format']
+SHARD = tuple(int(x) for x in os.environ.get('CHECK_SHARD', '0/1').split('/'))
 DEFAULTS = [None, None, False, False, False, None, '[...]', False, False, False, False, False, 2, 0, False, False, None, None]
 
 
@@ -165,7 +168,7 @@ def depth_check():
     while frame:
         here, frame = here + 1, frame.f_back
     top = sys.getrecursionlimit() - here - 2  # exact_at and exact themselves still fit
-    for name, fn, opts, text in DEPTH_SHAPES:
+    for name, fn, opts, text in DEPTH_SHAPES[SHARD[0]::SHARD[1]]:
         p, r = py_call(fn, opts), rs_call(fn, opts)
         diff = []
         for extra in range(max(0, top - 320), top):
@@ -194,7 +197,7 @@ def threshold(f, shape, lo=1):
 
 def main():
     bad = 0
-    for name, fn, opts, shape in SHAPES + (RUN_SHAPES if PACKAGE else []):
+    for name, fn, opts, shape in (SHAPES + (RUN_SHAPES if PACKAGE else []))[SHARD[0]::SHARD[1]]:
         p, r = py_call(fn, opts), rs_call(fn, opts)
         n = threshold(p, shape)
         line = [f'{name}: python fails from {n}']
