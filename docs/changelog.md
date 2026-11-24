@@ -3,6 +3,14 @@
 Every version runs in Rust with sqlparse 0.6.1 and gives sqlparse's answers. Each change below was checked equal to
 sqlparse before release ([Verification](verification.md)).
 
+## Unreleased
+
+- **`str()` of a statement in Rust** on CPython 3.12+: sqlparse's `TokenList.__str__` reads the leaves straight
+  from the objects (checked by `tools/check_str.py`). `[str(s) for s in parsestream(...)]` 18.6x → 23x.
+- **A caller's own stack with sqlparse's `SerializerUnicode`** after an `AlignedIndentFilter` or `ReindentFilter`
+  gets the string from the Rust: `AlignedIndentFilter` 18x → 66x (no Python objects at all), `ReindentFilter`
+  15.5x → 22x on the corpus, 20x → 30x on a short query.
+
 ## 0.1.7 (2026-11-24)
 
 - **django-debug-toolbar's SQL panel 62x faster** (was 5.8x): its own filters (`ElideSelectListsFilter`,

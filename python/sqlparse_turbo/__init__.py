@@ -787,12 +787,19 @@ def _run(self, sql, encoding=None):
             # django-debug-toolbar's own stack (looked at again for each statement, as sqlparse's run reads the
             # filter lists for each): its filters run in Rust as well, after the AlignedIndentFilter
             html = aligned is not None and _toolbar(self) == 'formatted'
+            # [that filter] and [sqlparse's SerializerUnicode]: the serializer's string comes from the Rust too
+            serial = not html and first is not None and _serializer_only(self)
         except RecursionError:  # at the very limit: the Python filter runs instead
             first = aligned = reindent = None
-            html = False
+            html = serial = False
         try:
             # Called from this generator, which stands where sqlparse's run stands: the Rust counts it so.
-            got = statements.next_html(aligned) if html else statements.next(aligned, reindent)
+            if html:
+                got = statements.next_html(aligned)
+            elif serial:
+                got = statements.next_serialized(aligned, reindent)
+            else:
+                got = statements.next(aligned, reindent)
         except _Deep:
             deep = True
         except RecursionError as err:
@@ -824,16 +831,23 @@ def _run(self, sql, encoding=None):
             continue
         if got is None:
             return
-        if type(got) is str:  # the toolbar's HTML of the statement
+        if type(got) is str:  # the toolbar's HTML, or the serializer's string after an AlignedIndentFilter
             yield got
             continue
-        stmt, first_done, last_func = got
+        if serial:
+            stmt, first_done, last_func, text = got
+        else:
+            stmt, first_done, last_func = got
+            text = None
         if first_done and reindent is not None:
             # what ReindentFilter.process leaves on the instance
             first._curr_stmt = stmt
             if last_func is not None:
                 first._last_func = last_func
             first._last_stmt = stmt
+        if text is not None:  # SerializerUnicode.process(stmt), made by the Rust from the same statement
+            yield text
+            continue
         try:
             # the stack's own list, as sqlparse iterates it, past the first filter if the Rust ran it
             for filter_ in _itertools.islice(self.stmtprocess, 1, None) if first_done else self.stmtprocess:
@@ -843,6 +857,17 @@ def _run(self, sql, encoding=None):
         except RecursionError as err:
             raise _filter_stack.SQLParseError(_RECURSION) from err
         yield stmt
+
+
+_SerializerUnicode = sqlparse.filters.others.SerializerUnicode
+
+
+def _serializer_only(stack):
+    """Whether the stack's statement filters are one filter and its serializers sqlparse's own SerializerUnicode
+    alone, as SerializerUnicode() makes it."""
+    stmt, post = stack.stmtprocess, stack.postprocess
+    return (type(stmt) is list and len(stmt) == 1 and type(post) is list and len(post) == 1
+            and type(post[0]) is _SerializerUnicode and not getattr(post[0], '__dict__', None))
 
 
 def _run_simplified(self, simplified):
@@ -867,6 +892,25 @@ def _run_simplified(self, simplified):
         yield stmt
 
 
+_original_str = _sql.TokenList.__str__
+_tree_str = _native.tree_str
+
+
+def _tokenlist_str(self):
+    """sqlparse's TokenList.__str__, `''.join(token.value for token in self.flatten())`, with install() on
+    CPython 3.12+: the values are read in Rust straight from the objects' slots, when sqlparse's classes are as
+    imported (the dict watcher says so at no cost) and the objects are sqlparse's own as sqlparse makes them (see
+    tree_str in lib.rs); else, and for a caller near the recursion limit, sqlparse's own code, in this frame."""
+    if _native.untouched_watched():
+        try:
+            _getframe(_getrecursionlimit() - _NEAR_LIMIT)
+        except ValueError:  # the usual case: the stack is not that deep
+            s = _tree_str(self)
+            if s is not None:
+                return s
+    return ''.join(token.value for token in self.flatten())
+
+
 # Everything of sqlparse the Rust reproduces: its modules' names and its classes' attributes, as imported. Where
 # install() puts the package's own function, that one is allowed as well.
 _WATCHED_MODULES = [
@@ -879,6 +923,7 @@ _INSTALLED = {
     (sqlparse, 'format'): format, (sqlparse, 'split'): split, (sqlparse, 'parse'): parse,
     (_lexer.Lexer, 'get_tokens'): _get_tokens,
     (sqlparse.engine.filter_stack.FilterStack, 'run'): _run,
+    (_sql.TokenList, '__str__'): _tokenlist_str,
 }
 
 
@@ -967,6 +1012,10 @@ def install():
     sqlparse.parse = parse
     _lexer.Lexer.get_tokens = _get_tokens
     sqlparse.engine.filter_stack.FilterStack.run = _run
+    if _watching:
+        # str() of a statement: only where a change to sqlparse's classes is told for free (CPython 3.12+); on
+        # 3.10 and 3.11 the comparison would cost more than it saves on short statements
+        _sql.TokenList.__str__ = _tokenlist_str
     return True
 
 
@@ -977,3 +1026,4 @@ def uninstall():
     sqlparse.parse = _original_parse
     _lexer.Lexer.get_tokens = _original_get_tokens
     sqlparse.engine.filter_stack.FilterStack.run = _original_run
+    _sql.TokenList.__str__ = _original_str

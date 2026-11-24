@@ -212,6 +212,23 @@ impl Layout {
         }
     }
 
+    /// What slot `i` of [`NAMES`] holds in `obj`, an instance of one of the classes `find` was given (a
+    /// `TokenList` subclass for `tokens`): as the member descriptor reads it, None where it is unset (Python
+    /// raises AttributeError there).
+    pub fn read<'py>(&self, obj: &Bound<'py, PyAny>, i: usize) -> Option<Bound<'py, PyAny>> {
+        // SAFETY: `obj` is an instance of a class with this layout (the caller checks its type), so the offset is
+        // that slot's place in it; the reference read there is borrowed while the GIL is held, and taken here.
+        unsafe {
+            let word = obj
+                .as_ptr()
+                .cast::<u8>()
+                .add(self.offsets[i])
+                .cast::<*mut ffi::PyObject>()
+                .read();
+            Bound::from_borrowed_ptr_or_opt(obj.py(), word)
+        }
+    }
+
     /// Sets the slots of `obj`, an object [`Layout::make`] made of one of the classes `find` was given (a
     /// `TokenList` subclass when `slots.tokens` is given).
     pub fn fill(&self, obj: &Bound<'_, PyAny>, slots: Slots<'_, '_>) {

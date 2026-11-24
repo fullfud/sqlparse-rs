@@ -304,6 +304,13 @@ impl Grouped {
         self.filtered
     }
 
+    /// `SerializerUnicode.process(stmt)` of the statement as it is now (after the first filter, when it ran).
+    pub fn serialized(&self) -> String {
+        let mut out = String::new();
+        format::serialize(&self.tree.to_str(tree::ROOT), &mut out);
+        out
+    }
+
     /// The statement as django-debug-toolbar's `BoldKeywordFilter` and `EscapedStringSerializer` leave it,
     /// after the first filter ran here. Those take a Python frame a level (`process`, `flatten`) and a few more:
     /// fewer than the `AlignedIndentFilter` that ran here, whose limits already held.

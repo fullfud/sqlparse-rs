@@ -361,6 +361,116 @@ fn set_sql_objects(
     Ok(())
 }
 
+/// sqlparse's classes by address, and whether each is a `TokenList` (has the `tokens` slot).
+static SQL_CLASSES: std::sync::OnceLock<Vec<(usize, bool)>> = std::sync::OnceLock::new();
+
+/// The most levels `tree_str` walks down: sqlparse's `flatten` takes a Python frame a level, and the package
+/// calls `tree_str` only from more than 256 frames below Python's recursion limit.
+const TREE_STR_DEPTH: usize = 200;
+
+/// `tree_str`: `''.join(token.value for token in obj.flatten())`, sqlparse's `TokenList.__str__`, read from the
+/// objects' slots; None (sqlparse's own code then runs) for anything but sqlparse's own objects as sqlparse
+/// makes them: an object of another class, an unset slot, an `is_group` that is not a bool, `tokens` that are not
+/// a list, a leaf value that is not a str, a tree deeper than [`TREE_STR_DEPTH`]. The caller checks that
+/// sqlparse's classes are as imported (`flatten`, the slots), so reading the slots is what the attribute
+/// lookups give: `token.is_group`, then `flatten()` of a `TokenList` (its tokens) or of a `Token` (itself),
+/// and a leaf's `value`.
+#[pyfunction]
+#[pyo3(name = "tree_str")]
+fn tree_str<'py>(py: Python<'py>, obj: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyAny>>> {
+    use pyo3::types::{PyList, PyString};
+    let Some(objects) = SQL_OBJECTS.get() else {
+        return Ok(None);
+    };
+    let Some(layout) = objects.layout.as_ref() else {
+        return Ok(None);
+    };
+    let classes = SQL_CLASSES.get_or_init(|| {
+        let token_list = objects.classes.get("TokenList").map(|c| c.bind(py).clone());
+        objects
+            .classes
+            .values()
+            .map(|c| {
+                let c = c.bind(py);
+                let is_list = match (&token_list, c.cast::<pyo3::types::PyType>()) {
+                    (Some(tl), Ok(t)) => t.is_subclass(tl).unwrap_or(false),
+                    _ => false,
+                };
+                (c.as_ptr() as usize, is_list)
+            })
+            .collect()
+    });
+    let class_of = |o: &Bound<'py, PyAny>| -> Option<bool> {
+        let t = o.get_type().as_ptr() as usize;
+        classes.iter().find(|(c, _)| *c == t).map(|&(_, l)| l)
+    };
+    let tokens_of = |o: &Bound<'py, PyAny>| -> Option<Bound<'py, PyList>> {
+        let tokens = layout.read(o, 8)?;
+        tokens
+            .is_exact_instance_of::<PyList>()
+            .then(|| tokens.cast_into::<PyList>().ok())?
+    };
+    let leaves = PyList::empty(py);
+    let leaf = |o: &Bound<'py, PyAny>| -> PyResult<bool> {
+        match layout.read(o, 0) {
+            Some(v) if v.is_exact_instance_of::<PyString>() => {
+                leaves.append(v)?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    };
+    // self.flatten(): a TokenList's walks its tokens, a Token's yields itself
+    let Some(root_is_list) = class_of(obj) else {
+        return Ok(None);
+    };
+    if !root_is_list {
+        if !leaf(obj)? {
+            return Ok(None);
+        }
+    } else {
+        let Some(tokens) = tokens_of(obj) else {
+            return Ok(None);
+        };
+        let mut stack: Vec<(Bound<'py, PyList>, usize)> = vec![(tokens, 0)];
+        while let Some((list, i)) = stack.pop() {
+            // the list as it is at this step, as the generator reads it
+            if i >= list.len() {
+                continue;
+            }
+            let token = list.get_item(i)?;
+            stack.push((list, i + 1));
+            let Some(is_list) = class_of(&token) else {
+                return Ok(None);
+            };
+            let Some(is_group) = layout.read(&token, 3) else {
+                return Ok(None);
+            };
+            let is_group = if is_group.is(pyo3::types::PyBool::new(py, true)) {
+                true
+            } else if is_group.is(pyo3::types::PyBool::new(py, false)) {
+                false
+            } else {
+                return Ok(None);
+            };
+            if is_group && is_list {
+                let Some(tokens) = tokens_of(&token) else {
+                    return Ok(None);
+                };
+                if stack.len() >= TREE_STR_DEPTH {
+                    return Ok(None);
+                }
+                stack.push((tokens, 0));
+            } else if !leaf(&token)? {
+                return Ok(None);
+            }
+        }
+    }
+    // ''.join of the values: Python's own join (one value is returned as itself, as there)
+    let joined = PyString::new(py, "").call_method1("join", (leaves,))?;
+    Ok(Some(joined))
+}
+
 /// `objects_direct`: whether sqlparse's objects are made and filled directly (see `slots`), not through
 /// `object.__new__` and `setattr` calls. For the checks.
 #[pyfunction]
@@ -481,6 +591,46 @@ impl Statements {
         };
         Ok(Some(
             pyo3::types::PyTuple::new(py, [statement, filtered, last])?.into_any(),
+        ))
+    }
+
+    /// `next` for a stack whose only statement filter is the one given and whose only serializer is sqlparse's
+    /// `SerializerUnicode`: when that filter was run here, the serializer's string as well, as (statement,
+    /// True, last_func, string); an `AlignedIndentFilter` keeps no state, so then only the string. Else what
+    /// `next` gives, with None for the string.
+    #[pyo3(signature = (aligned=None, reindent=None))]
+    fn next_serialized<'py>(
+        &mut self,
+        py: Python<'py>,
+        aligned: Option<port::AlignedState>,
+        reindent: Option<port::ReindentState>,
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let objects = SQL_OBJECTS.get().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("statements: set_sql_objects was not called")
+        })?;
+        let stateless = aligned.is_some();
+        let Some(grouped) = self.0.next(aligned, reindent).map_err(error)? else {
+            return Ok(None);
+        };
+        let filtered = grouped.filtered();
+        if filtered && stateless {
+            return Ok(Some(
+                pyo3::types::PyString::new(py, &grouped.serialized()).into_any(),
+            ));
+        }
+        let (statement, last_func) = gc_paused(py, || grouped.to_python(py, objects))?;
+        let last = match last_func {
+            Some(o) => o,
+            None => py.None().into_bound(py),
+        };
+        let text = if filtered {
+            pyo3::types::PyString::new(py, &grouped.serialized()).into_any()
+        } else {
+            py.None().into_bound(py)
+        };
+        let flag = pyo3::types::PyBool::new(py, filtered).to_owned().into_any();
+        Ok(Some(
+            pyo3::types::PyTuple::new(py, [statement, flag, last, text])?.into_any(),
         ))
     }
 
@@ -756,6 +906,7 @@ fn native_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(drifted, m)?)?;
     m.add_function(wrap_pyfunction!(statements, m)?)?;
     m.add_function(wrap_pyfunction!(toolbar_simplified, m)?)?;
+    m.add_function(wrap_pyfunction!(tree_str, m)?)?;
     m.add_class::<ToolbarSimplified>()?;
     m.add_function(wrap_pyfunction!(objects_direct, m)?)?;
     m.add_function(wrap_pyfunction!(watch_callback, m)?)?;

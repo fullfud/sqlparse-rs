@@ -54,7 +54,7 @@ Everything else, `install()`, `FilterStack.run`, bytes and streams: [Usage][usag
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/fullfud/sqlparse-turbo/main/docs/assets/calls.svg" alt="Speed-ups with install(): format of bytes 87x, django-debug-toolbar's SQL panel 62x, format of one short ORM query 58x, split of one short query 42x, FilterStack.run with a ReindentFilter 15.5x, parsestream 8.6x." width="760">
+  <img src="https://raw.githubusercontent.com/fullfud/sqlparse-turbo/main/docs/assets/calls.svg" alt="Speed-ups with install(): format of bytes 87x, format of one short ORM query 71x, split of one short query 67x, FilterStack.run with an AlignedIndentFilter 66x, django-debug-toolbar's SQL panel 62x, parsestream with str() of each statement 23x." width="760">
 </p>
 
 Measure it on your machine in a few seconds with [`bench/quick_speed.py`][quick]:

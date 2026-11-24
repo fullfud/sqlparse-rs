@@ -303,7 +303,7 @@ fn output_filter<'a>(
 }
 
 /// `SerializerUnicode.process`.
-fn serialize(text: &str, out: &mut String) {
+pub(crate) fn serialize(text: &str, out: &mut String) {
     let lines: Vec<&str> = split_unquoted_newlines(text)
         .into_iter()
         .map(pystr::rstrip)

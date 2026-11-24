@@ -58,6 +58,17 @@ objects. It runs only for the default lexer as sqlparse sets it up and a `str` t
 - `uninstall()` puts sqlparse's functions back.
 - `install()` refuses (returns False) if the installed sqlparse is not 0.6.1.
 
+## `str()` of a statement
+
+On CPython 3.12 and later `install()` also replaces `TokenList.__str__`, sqlparse's `''.join(token.value for
+token in self.flatten())`: the Rust reads the leaves' values straight from the objects. It does so only while
+sqlparse's classes are as imported (Python's dict watcher tells the package of any change for free) and only on
+sqlparse's own objects as sqlparse makes them. A tree a caller changed in a way the Rust does not reproduce (a
+token of its own class, an `is_group` that is not a bool, `tokens` that are not a list, a value that is not a
+`str`, an unset attribute, more than 200 levels), or a caller near the recursion limit, gets sqlparse's own code.
+On 3.10 and 3.11, which have no dict watcher, `str()` stays sqlparse's: checking every call would cost more than
+it saves on short statements.
+
 ## `FilterStack.run`: callers' own filters
 
 `install()` also replaces `FilterStack.run`, which callers use to run their own sqlparse filters
@@ -68,7 +79,8 @@ objects. It runs only for the default lexer as sqlparse sets it up and a `str` t
 - A first statement filter that is sqlparse's own `AlignedIndentFilter` or `ReindentFilter` runs in Rust too,
   from the instance's state. The instance is left as sqlparse's would be (`_last_stmt`, `_last_func`).
 - The stack's other statement filters and its serializers run in Python, except django-debug-toolbar's own,
-  which run in Rust as well ([Django](django.md)).
+  which run in Rust as well ([Django](django.md)), and a lone `SerializerUnicode` after a first filter the Rust
+  ran, whose string the Rust makes from the same statement.
 - Any other stack runs as sqlparse's.
 
 ## `parsestream`

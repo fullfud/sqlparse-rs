@@ -61,21 +61,27 @@ Two more, on the 400 query files:
 
 ## Other ways into sqlparse
 
-![Speed-ups with install(): format of bytes 87x, django-debug-toolbar's SQL panel 62x, format of one short ORM query 58x, split of one short query 42x, FilterStack.run with a ReindentFilter 15.5x, parsestream 8.6x.](assets/calls.svg)
+![Speed-ups with install(): format of bytes 87x, format of one short ORM query 71x, split of one short query 67x, FilterStack.run with an AlignedIndentFilter 66x, django-debug-toolbar's SQL panel 62x, parsestream with str() of each statement 23x.](assets/calls.svg)
 
 With `install()`, the same 400 query files, CPython 3.13, best of 3:
 
 | Call | sqlparse | sqlparse_turbo | Speed-up |
 | --- | ---: | ---: | ---: |
 | `format(sql.encode(), keyword_case='upper')`, bytes in | 1.08 s | 0.012 s | **87x** |
-| `sqlparse.parsestream(io.StringIO(sql))` | 3.34 s | 0.39 s | **8.6x** |
-| `FilterStack.run`, a stack of the caller's own with a `ReindentFilter` | 3.69 s | 0.24 s | **15.5x** |
+| `[str(s) for s in sqlparse.parsestream(io.StringIO(sql))]` | 3.00 s | 0.133 s | **23x** |
+| `FilterStack.run`, the caller's own stack: `AlignedIndentFilter`, `SerializerUnicode` | 3.55 s | 0.054 s | **66x** |
+| `FilterStack.run`, the caller's own stack: `ReindentFilter`, `SerializerUnicode` | 3.73 s | 0.170 s | **22x** |
 | django-debug-toolbar's SQL panel (its own two stacks, its own filters) | 4.89 s | 0.079 s | **62x** |
-| `format(sql, reindent=True)` on a short ORM query, one call | 233 µs | 4 µs | **58x** |
-| `split(sql)` on a short ORM query, one call | 55 µs | 1.3 µs | **42x** |
+| `format(sql, reindent=True)` on a short ORM query, one call | 471 µs | 6.7 µs | **71x** |
+| `split(sql)` on a short ORM query, one call | 117 µs | 1.8 µs | **67x** |
+| `str(sqlparse.parse(sql)[0])` on a short ORM query, one call | 394 µs | 9.9 µs | **40x** |
 
 The toolbar's panel runs its own filters in Rust too, when they are the code the Rust reproduces
-([Django](django.md)).
+([Django](django.md)). A stack whose only serializer is sqlparse's `SerializerUnicode` after a first filter the
+Rust ran gets the string from the Rust; after an `AlignedIndentFilter`, which keeps no state, no Python objects
+are made at all. `parse` and `parsestream` stay near 23x: what is left is grouping in Rust, making sqlparse's
+objects, and Python's garbage collector going over them (about a third), which sqlparse pays as well. The short
+calls were measured on the query Django's admin makes for one user (`SELECT "auth_user"."id", ... LIMIT 21`).
 
 ## `parse` and the garbage collector
 

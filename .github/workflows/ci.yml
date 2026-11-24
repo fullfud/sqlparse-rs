@@ -145,6 +145,8 @@ jobs:
         run: |
           python -m pip install django-debug-toolbar
           python -X utf8 tools/check_toolbar.py
+      - name: str() of statements, serializer stacks
+        run: python -X utf8 tools/check_str.py
       - name: Package against sqlparse (quick)
         if: matrix.os != 'ubuntu-latest'
         run: python -X utf8 tools/check_package.py --quick
