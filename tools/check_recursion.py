@@ -146,7 +146,11 @@ def exact(f, text):
         f(text)
         return 'ok'
     except Exception as e:
-        return f'{type(e).__name__}: {str(e)[:40]}'
+        # No str(e) or formatting: up to 3.11 those C calls count against the limit this runs right at. The first
+        # 32 characters: 'maximum recursion depth exceeded' (3.10 appends where Python hit it, ' in comparison',
+        # a known difference, see the README's Limits) and sqlparse's 'Maximum recursion depth exceeded'.
+        msg = e.args[0] if e.args and type(e.args[0]) is str else ''
+        return type(e).__name__, msg[:32]
 
 
 def exact_at(extra, f, text):
