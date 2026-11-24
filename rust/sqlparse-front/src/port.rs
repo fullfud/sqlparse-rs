@@ -54,6 +54,252 @@ pub fn parse_trees(sql: &str, run: bool) -> Result<Parsed, String> {
     format::parse(sql, &stack).map(Parsed)
 }
 
+/// Not part of the front door: `FilterStack.run`'s statements one at a time, as sqlparse's run gives them: the
+/// text is lexed and split at once (nothing in that can be seen from Python), each statement is grouped when it
+/// is asked for, with the recursion limit counted from where the caller then stands.
+pub struct Lazy {
+    text: String,
+    /// The tokens as (type, start, end) in `text`.
+    toks: Vec<(&'static str, usize, usize)>,
+    ranges: Vec<std::ops::Range<usize>>,
+    next: usize,
+}
+
+/// A caller's own `AlignedIndentFilter` as found: `n`, `char`, `offset`, `indent`, `_max_kwd_len`.
+pub type AlignedState = (String, String, i64, i64, i64);
+
+/// A caller's own `ReindentFilter` as found: `n`, `char`, `width`, `indent`, `offset`, `wrap_after`,
+/// `comma_first`, `indent_columns`, `compact`, `len(_last_func.value)` (None while `_last_func` is None) and
+/// `str(_last_stmt).endswith('\n')` (None while `_last_stmt` is None).
+pub type ReindentState = (
+    String,
+    String,
+    i64,
+    i64,
+    i64,
+    i64,
+    bool,
+    bool,
+    bool,
+    Option<i64>,
+    Option<bool>,
+);
+
+/// One statement from [`Lazy`]: the tree; whether the caller's first statement filter was run on it here; for
+/// an `AlignedIndentFilter`, the `TokenList` that filter wraps the statement's tokens in; for a
+/// `ReindentFilter`, the node its `_last_func` was set to, if it was.
+pub struct Grouped {
+    tree: tree::Tree,
+    filtered: bool,
+    temp: Option<filters::TempList>,
+    last_func: Option<tree::Id>,
+}
+
+impl Grouped {
+    fn plain(tree: tree::Tree) -> Grouped {
+        Grouped {
+            tree,
+            filtered: false,
+            temp: None,
+            last_func: None,
+        }
+    }
+}
+
+/// Whether `id` is in the statement, through the token lists from the root.
+fn reaches(t: &tree::Tree, id: tree::Id) -> bool {
+    let mut todo = vec![tree::ROOT];
+    while let Some(n) = todo.pop() {
+        if n == id {
+            return true;
+        }
+        todo.extend_from_slice(t.tokens(n));
+    }
+    false
+}
+
+/// Up to what height (and frames left to Python's limit) the Rust runs a caller's `AlignedIndentFilter`: the
+/// filter takes a few Python frames a level (`_process`, `_process_default`, `_process_parenthesis`) and a few
+/// more for a look (`_next_token`, `token_next_by`, `match`, `str()` down a group). Past these the statement goes
+/// to the Python filter, which then raises what it raises, where it raises it.
+const ALIGNED_HEIGHT: usize = 60;
+const ALIGNED_FRAMES_PER_LEVEL: usize = 4;
+const ALIGNED_FRAMES: usize = 40;
+
+/// The same for a caller's `ReindentFilter`: `_process` and `_process_default` a level, `str()` down a group
+/// before a keyword, and `_next_token`, `token_next_by` and the matching for a look.
+const REINDENT_HEIGHT: usize = 60;
+const REINDENT_FRAMES_PER_LEVEL: usize = 4;
+const REINDENT_FRAMES: usize = 40;
+
+impl Lazy {
+    /// None if the lexer's tokens did not cover the text in order (they always do: each is a slice of it).
+    pub fn new(text: String) -> Option<Lazy> {
+        let (toks, ranges) = {
+            let tokens = lexer::tokenize(&text);
+            let ranges = split::statements(&tokens);
+            let base = text.as_ptr() as usize;
+            let mut at = 0;
+            let mut toks = Vec::with_capacity(tokens.len());
+            for (ttype, value) in &tokens {
+                if value.as_ptr() as usize != base + at {
+                    return None;
+                }
+                toks.push((*ttype, at, at + value.len()));
+                at += value.len();
+            }
+            if at != text.len() {
+                return None;
+            }
+            (toks, ranges)
+        };
+        Some(Lazy {
+            text,
+            toks,
+            ranges,
+            next: 0,
+        })
+    }
+
+    /// The next statement grouped, then the caller's first statement filter (an `AlignedIndentFilter` or a
+    /// `ReindentFilter`, whose state is given) run on it when the statement is well within what the Python filter
+    /// does without hitting a limit; None after the last.
+    pub fn next(
+        &mut self,
+        aligned: Option<AlignedState>,
+        reindent: Option<ReindentState>,
+    ) -> Result<Option<Grouped>, String> {
+        let Some(range) = self.ranges.get(self.next).cloned() else {
+            return Ok(None);
+        };
+        self.next += 1;
+        let stack = python_stack_from(PARSE_ENTRY_FRAMES_311, RUN_FRAMES_311, RUN_FRAMES_312);
+        let view: Vec<(&'static str, &str)> = self.toks[range]
+            .iter()
+            .map(|&(ttype, a, b)| (ttype, &self.text[a..b]))
+            .collect();
+        let mut tree = tree::Tree::statement(&view);
+        grouping::group(&mut tree, &stack, 3)?;
+        filters::reset_indent_budget();
+        // the statement as grouping left it, for the Python filter to run on (and raise what it raises)
+        let regrouped = || -> Result<Option<Grouped>, String> {
+            let mut tree = tree::Tree::statement(&view);
+            grouping::group(&mut tree, &stack, 3)?;
+            Ok(Some(Grouped::plain(tree)))
+        };
+        if let Some((n, ch, offset, indent, max_kwd_len)) = aligned {
+            let (height, _) = tree.shape();
+            if height > ALIGNED_HEIGHT
+                || stack.may_overflow(ALIGNED_FRAMES_PER_LEVEL * height + ALIGNED_FRAMES)
+            {
+                return Ok(Some(Grouped::plain(tree)));
+            }
+            let mut f = filters::Aligned::with_state(
+                n,
+                ch,
+                offset as i128,
+                indent as i128,
+                max_kwd_len as i128,
+                &stack,
+            );
+            return match f.run(&mut tree) {
+                Ok(()) => Ok(Some(Grouped {
+                    tree,
+                    filtered: true,
+                    temp: f.temp.take(),
+                    last_func: None,
+                })),
+                Err(_) => regrouped(),
+            };
+        }
+        let Some(state) = reindent else {
+            return Ok(Some(Grouped::plain(tree)));
+        };
+        let (height, _) = tree.shape();
+        if height > REINDENT_HEIGHT
+            || stack.may_overflow(REINDENT_FRAMES_PER_LEVEL * height + REINDENT_FRAMES)
+        {
+            return Ok(Some(Grouped::plain(tree)));
+        }
+        let (n, ch, width, indent, offset, wrap_after, comma_first, indent_columns, compact) = (
+            state.0, state.1, state.2, state.3, state.4, state.5, state.6, state.7, state.8,
+        );
+        let mut f = filters::Reindent::with_state(
+            filters::ReindentFound {
+                n,
+                ch,
+                width,
+                indent,
+                offset,
+                wrap_after,
+                comma_first,
+                indent_columns,
+                compact,
+                last_func_len: state.9,
+                last_stmt_nl: state.10,
+            },
+            &stack,
+        );
+        match f.run(&mut tree) {
+            // the token _last_func is left at must be one the statement's objects include
+            Ok(()) if f.last_func.is_none_or(|id| reaches(&tree, id)) => Ok(Some(Grouped {
+                last_func: f.last_func,
+                tree,
+                filtered: true,
+                temp: None,
+            })),
+            _ => regrouped(),
+        }
+    }
+}
+
+impl Lazy {
+    /// Takes the next statement without grouping it (false after the last): `last_tokens` then gives it.
+    pub fn skip(&mut self) -> bool {
+        if self.next < self.ranges.len() {
+            self.next += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// The tokens of the statement `next` last took, as (type name, text): for the package to make that
+    /// statement as sqlparse's splitter does when it is handed to sqlparse.
+    pub fn last_tokens(&self) -> Vec<(&'static str, &str)> {
+        match self.next.checked_sub(1).and_then(|i| self.ranges.get(i)) {
+            Some(range) => self.toks[range.clone()]
+                .iter()
+                .map(|&(ttype, a, b)| (ttype, &self.text[a..b]))
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+}
+
+impl Grouped {
+    /// Whether the caller's first statement filter was run on the statement here.
+    pub fn filtered(&self) -> bool {
+        self.filtered
+    }
+
+    /// The statement as sqlparse's own objects (see [`Parsed::to_python`]), and the object the caller's
+    /// `ReindentFilter._last_func` was set to here, if it was.
+    pub fn to_python<'py>(
+        &self,
+        py: pyo3::Python<'py>,
+        sql: &SqlObjects,
+    ) -> pyo3::PyResult<StatementObjects<'py>> {
+        tree_object(py, &self.tree, sql, self.temp.as_ref(), self.last_func)
+    }
+}
+
+/// A statement's object, and the object made for one of its nodes when asked for.
+pub type StatementObjects<'py> = (
+    pyo3::Bound<'py, pyo3::PyAny>,
+    Option<pyo3::Bound<'py, pyo3::PyAny>>,
+);
+
 /// What `sqlparse.parse` has on the stack above `FilterStack.run`'s frame that a call from `run` itself has not,
 /// by version (the `tuple()` C call counts up to 3.11 only). Measured with tools/check_recursion.py package.
 const RUN_FRAMES_311: usize = 1;
@@ -65,6 +311,8 @@ pub struct SqlObjects {
     pub classes: std::collections::HashMap<String, pyo3::Py<pyo3::PyAny>>,
     pub types: std::collections::HashMap<String, pyo3::Py<pyo3::PyAny>>,
     pub new: pyo3::Py<pyo3::PyAny>,
+    /// How to make and fill the objects without Python calls, when that was found to work (see `slots`).
+    pub layout: Option<crate::slots::Layout>,
 }
 
 impl Parsed {
@@ -76,7 +324,10 @@ impl Parsed {
         py: pyo3::Python<'py>,
         sql: &SqlObjects,
     ) -> pyo3::PyResult<Vec<pyo3::Bound<'py, pyo3::PyAny>>> {
-        self.0.iter().map(|t| tree_object(py, t, sql)).collect()
+        self.0
+            .iter()
+            .map(|t| tree_object(py, t, sql, None, None).map(|(root, _)| root))
+            .collect()
     }
 }
 
@@ -84,7 +335,9 @@ fn tree_object<'py>(
     py: pyo3::Python<'py>,
     t: &tree::Tree,
     sql: &SqlObjects,
-) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
+    temp: Option<&filters::TempList>,
+    want: Option<tree::Id>,
+) -> pyo3::PyResult<StatementObjects<'py>> {
     use pyo3::prelude::*;
     use pyo3::types::{PyList, PyString};
     use pyo3::{IntoPyObjectExt, intern};
@@ -99,7 +352,10 @@ fn tree_object<'py>(
         }
         let name = t.cls(id).name();
         let cls = sql.classes.get(name).ok_or_else(|| missing(name))?;
-        objs[id] = Some(sql.new.bind(py).call1((cls.bind(py),))?);
+        objs[id] = Some(match &sql.layout {
+            Some(layout) => layout.make(cls.bind(py))?,
+            None => sql.new.bind(py).call1((cls.bind(py),))?,
+        });
         order.push(id);
         todo.extend(t.tokens(id).iter().rev());
         if let Some(p) = t.n[id].parent {
@@ -143,6 +399,32 @@ fn tree_object<'py>(
             Some(p) => objs[p].clone().expect("reached above"),
             None => none.clone(),
         };
+        if let Some(layout) = &sql.layout {
+            let tokens = if t.is_group(id) {
+                let children = t
+                    .tokens(id)
+                    .iter()
+                    .map(|&c| objs[c].clone().expect("reached above"));
+                Some(PyList::new(py, children)?)
+            } else {
+                None
+            };
+            layout.fill(
+                obj,
+                crate::slots::Slots {
+                    value: &py_value,
+                    ttype: &ttype,
+                    parent: &parent,
+                    is_group: t.is_group(id),
+                    is_keyword: node.is_keyword,
+                    is_whitespace: node.is_whitespace,
+                    is_newline: node.is_newline,
+                    normalized: &py_normalized,
+                    tokens,
+                },
+            );
+            continue;
+        }
         obj.setattr(intern!(py, "value"), py_value)?;
         obj.setattr(intern!(py, "ttype"), ttype)?;
         obj.setattr(intern!(py, "parent"), parent)?;
@@ -159,10 +441,37 @@ fn tree_object<'py>(
             obj.setattr(intern!(py, "tokens"), PyList::new(py, children)?)?;
         }
     }
-    objs[tree::ROOT]
-        .clone()
-        .expect("the root")
-        .into_bound_py_any(py)
+    let root = objs[tree::ROOT].clone().expect("the root");
+    if let Some(temp) = temp {
+        // sql.TokenList(stmt.tokens): Token.__init__(None, value), then is_group; the statement's children (and
+        // what was inserted at the top since) have it as their parent
+        let name = "TokenList";
+        let cls = sql.classes.get(name).ok_or_else(|| missing(name))?;
+        let obj = sql.new.bind(py).call1((cls.bind(py),))?;
+        let value = PyString::new(py, &temp.value);
+        obj.setattr(intern!(py, "value"), &value)?;
+        obj.setattr(intern!(py, "ttype"), &none)?;
+        obj.setattr(intern!(py, "parent"), &none)?;
+        obj.setattr(intern!(py, "is_group"), true)?;
+        obj.setattr(intern!(py, "is_keyword"), false)?;
+        obj.setattr(intern!(py, "is_whitespace"), false)?;
+        obj.setattr(intern!(py, "is_newline"), false)?;
+        obj.setattr(intern!(py, "normalized"), &value)?;
+        let tokens = if temp.shares_tokens {
+            root.getattr(intern!(py, "tokens"))?
+        } else {
+            PyList::empty(py).into_any()
+        };
+        obj.setattr(intern!(py, "tokens"), tokens)?;
+        for &c in t.tokens(tree::ROOT) {
+            objs[c]
+                .as_ref()
+                .expect("reached above")
+                .setattr(intern!(py, "parent"), &obj)?;
+        }
+    }
+    let wanted = want.and_then(|id| objs.get(id).cloned().flatten());
+    Ok((root.into_bound_py_any(py)?, wanted))
 }
 
 /// One bit per code point: those the running Python's Unicode tables treat differently from the CPython 3.11
@@ -359,7 +668,7 @@ fn python_stack_from(
         }
         Some(grouping::Stack::python(depth + 1, shift, limit, exact_base))
     })
-    .unwrap_or_else(grouping::Stack::unlimited)
+    .unwrap_or_else(grouping::Stack::exhausted)
 }
 
 /// What the probe's count is off by, against counting frames (measured with tools/check_recursion.py).

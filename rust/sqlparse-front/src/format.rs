@@ -313,6 +313,7 @@ fn serialize(text: &str, out: &mut String) {
 
 /// `sqlparse.format(text, **options)`. `stack` says where Python's recursion limit stands for the call.
 pub(crate) fn format(text: &str, o: &Options, stack: &Stack) -> Result<String, String> {
+    filters::reset_indent_budget();
     let plan = validate(o)?;
     // values stay slices of the text unless a preprocess filter changes them
     let mut tokens: Vec<(&'static str, std::borrow::Cow<str>)> = lexer::tokenize(text)

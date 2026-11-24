@@ -37,7 +37,7 @@ total     72.63 s
 
 - **`format`** (100%): Hot inside `sqlparse/`: port the exported function that calls it, with it.
 - **`run`** (100%): Hot inside `sqlparse/engine/`: port the exported function that calls it, with it.
-- **`group`** (58%): Hot and exported by `sqlparse/engine/`: port it (`rust-anything bridge D:\Projects\sqlparse-rs\upstream sqlparse/engine/`), then check `rust-anything bench`.
+- **`group`** (58%): Hot and exported by `sqlparse/engine/`: port it (`rust-anything bridge upstream sqlparse/engine/`), then check `rust-anything bench`.
 - **`process`** (27%): Hot inside `sqlparse/engine/`: port the exported function that calls it, with it.
 - **`_token_matching`** (27%): Hot inside `sqlparse/`: port the exported function that calls it, with it.
 - **`token_next_by`** (27%): Hot inside `sqlparse/`: port the exported function that calls it, with it.
@@ -50,7 +50,7 @@ total     72.63 s
 - **`match`** (9%): Hot inside `sqlparse/`: port the exported function that calls it, with it.
 - **`_process`** (9%): Hot inside `sqlparse/filters/`: port the exported function that calls it, with it.
 - **`_process_default`** (9%): Hot inside `sqlparse/filters/`: port the exported function that calls it, with it.
-- **`group_typed_literal`** (6%): Hot and exported by `sqlparse/engine/`: port it (`rust-anything bridge D:\Projects\sqlparse-rs\upstream sqlparse/engine/`), then check `rust-anything bench`.
+- **`group_typed_literal`** (6%): Hot and exported by `sqlparse/engine/`: port it (`rust-anything bridge upstream sqlparse/engine/`), then check `rust-anything bench`.
 - **`_process_identifierlist`** (6%): Hot inside `sqlparse/filters/`: port the exported function that calls it, with it.
 - **`_process_parenthesis`** (6%): Hot inside `sqlparse/filters/`: port the exported function that calls it, with it.
 

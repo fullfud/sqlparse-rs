@@ -59,7 +59,8 @@ const MARGIN: usize = 256;
 const MAX_BODY_FRAMES: usize = 8;
 
 impl Stack {
-    /// No limit: for callers outside Python.
+    /// No limit: for callers outside Python (the benchmarks).
+    #[allow(dead_code)]
     pub(crate) fn unlimited() -> Stack {
         Stack {
             base: 0,
@@ -83,6 +84,18 @@ impl Stack {
             limit,
             probe: Some(probe),
             shift,
+            exact: Cell::new(None),
+        }
+    }
+
+    /// Python's stack could not be read (the calls that read it failed, as they do at the limit itself): as if
+    /// at the limit, so every call goes to sqlparse.
+    pub(crate) fn exhausted() -> Stack {
+        Stack {
+            base: usize::MAX / 2,
+            limit: 0,
+            probe: None,
+            shift: 0,
             exact: Cell::new(None),
         }
     }
@@ -783,6 +796,10 @@ fn group_values(t: &mut Tree) {
 /// it could not run into a limit either (sqlparse's grouping depth and list length, which every `_group` pass
 /// checks on every list, or Python's recursion limit for the passes that count frames).
 pub(crate) fn group(t: &mut Tree, stack: &Stack, entry: usize) -> Result<(), String> {
+    // a caller standing near the limit: sqlparse answers (see the end of this function)
+    if stack.may_overflow(entry + DEEP_FRAMES) {
+        return Err(DEEP.into());
+    }
     // whether sqlparse's limits could stop a pass that walks every list
     let limited = |t: &mut Tree| {
         let (height, longest) = t.shape();
@@ -846,5 +863,22 @@ pub(crate) fn group(t: &mut Tree, stack: &Stack, entry: usize) -> Result<(), Str
     if t.may_have_word(w::VALUES) {
         group_values(t);
     }
+    // Not every pass counts Python's frames (group_comments, group_identifier, group_order, group_aliased,
+    // align_comments, and the comment, whitespace and operator filters after them), and a pass that does not
+    // could reach the limit before one that does: a statement deep enough for that, from a caller standing
+    // near the limit, goes to sqlparse, which answers it exactly. Those passes use at most a few frames a level
+    // and a few more for a look, plus a group's height when they turn it into a string.
+    let (height, _) = t.shape();
+    if stack.may_overflow(entry + DEEP_FRAMES_PER_LEVEL * height + DEEP_FRAMES) {
+        return Err(DEEP.into());
+    }
     Ok(())
 }
+
+/// See the end of [`group`].
+const DEEP_FRAMES_PER_LEVEL: usize = 3;
+const DEEP_FRAMES: usize = 32;
+
+/// The error that hands a statement to sqlparse (`sqlparse_turbo._Deep`, which the package catches).
+pub(crate) const DEEP: &str =
+    "sqlparse_turbo._Deep: deep enough near the recursion limit for sqlparse to answer";

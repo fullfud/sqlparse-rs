@@ -1,6 +1,6 @@
 {
   "schema": "rust-anything/bridge@1",
-  "root": "D:\\Projects\\sqlparse-rs",
+  "root": "../..",
   "unit": "front/sqlparse_front.py",
   "language": "python",
   "kind": "pyo3",

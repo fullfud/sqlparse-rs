@@ -491,6 +491,62 @@ fn str_len(t: &Tree, id: Id) -> i128 {
 /// `prefix + char * n` for the indent character, as Python does it: a negative count gives no indent, a
 /// count past `sys.maxsize` is an OverflowError, and memory that cannot be had is a MemoryError (never an
 /// abort). One allocation, so the indent is never copied.
+/// How many bytes of indent the filters may make for one call (a `format`, or one statement of a caller's
+/// `FilterStack.run`). The reindent filter indents a new line as far as the line it breaks is long, so a long
+/// token before a long list makes an output many times the input (300 KB of SQL, 1.2 GB of output), in sqlparse
+/// as here. Rust cannot catch a failed allocation (the process stops) where Python raises MemoryError, so past
+/// this the Rust stops and the call goes to sqlparse, which makes that output itself or raises MemoryError.
+const INDENT_BUDGET: usize = 256 << 20;
+
+thread_local! {
+    static INDENT_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// A new call: its indent budget is whole again.
+pub(crate) fn reset_indent_budget() {
+    INDENT_MADE.with(|m| m.set(0));
+}
+
+/// The error that hands a call to sqlparse (`sqlparse_turbo._Oversize`, which the package catches).
+pub(crate) const OVERSIZE: &str =
+    "sqlparse_turbo._Oversize: the output grows past what the port makes";
+
+fn spend_indent(bytes: usize) -> Result<(), String> {
+    INDENT_MADE.with(|m| {
+        let made = m.get().saturating_add(bytes);
+        m.set(made);
+        if made > INDENT_BUDGET {
+            Err(OVERSIZE.into())
+        } else {
+            Ok(())
+        }
+    })
+}
+
+/// [`repeat`] with a string to repeat: `prefix + unit * n`.
+fn repeat_str(prefix: &str, unit: &str, n: i128) -> Result<String, String> {
+    if n <= 0 {
+        return Ok(prefix.to_string());
+    }
+    if n > isize::MAX as i128 {
+        return Err("OverflowError: cannot fit 'int' into an index-sized integer".into());
+    }
+    let n = n as usize;
+    let bytes = n
+        .checked_mul(unit.len())
+        .and_then(|b| b.checked_add(prefix.len()))
+        .ok_or_else(|| String::from("MemoryError: "))?;
+    spend_indent(bytes)?;
+    let mut s = String::new();
+    s.try_reserve_exact(bytes)
+        .map_err(|_| String::from("MemoryError: "))?;
+    s.push_str(prefix);
+    for _ in 0..n {
+        s.push_str(unit);
+    }
+    Ok(s)
+}
+
 fn repeat(prefix: &str, ch: char, n: i128) -> Result<String, String> {
     if n <= 0 {
         return Ok(prefix.to_string());
@@ -503,6 +559,7 @@ fn repeat(prefix: &str, ch: char, n: i128) -> Result<String, String> {
         .checked_mul(ch.len_utf8())
         .and_then(|b| b.checked_add(prefix.len()))
         .ok_or_else(|| String::from("MemoryError: "))?;
+    spend_indent(bytes)?;
     let mut s = String::new();
     s.try_reserve_exact(bytes)
         .map_err(|_| String::from("MemoryError: "))?;
@@ -514,7 +571,12 @@ fn repeat(prefix: &str, ch: char, n: i128) -> Result<String, String> {
 // ---------------------------------------------------------------- ReindentFilter
 
 pub(crate) struct Reindent<'s> {
-    ch: char,
+    /// `self.n` and `self.char`; `len(self.char)`; the character itself when it is one and `n` is '\n', as
+    /// `format()` makes the filter (the quick repeat).
+    n: String,
+    ch: String,
+    ch_len: i128,
+    single: Option<char>,
     width: i128,
     indent: i128,
     offset: i128,
@@ -524,9 +586,32 @@ pub(crate) struct Reindent<'s> {
     compact: bool,
     /// `len(self._last_func.value)` (the token keeps that value for good once set).
     last_func_len: Option<i128>,
+    /// The node `self._last_func` was last set to here (`tlist[0]` of the last function processed).
+    #[allow(dead_code)] // read by port.rs; the examples take this file without it
+    pub(crate) last_func: Option<Id>,
     /// Whether `str(self._last_stmt)` ends in '\n', once there is a last statement.
     last_stmt_nl: Option<bool>,
+    /// Python frames up to `_process`'s, counted as `run` counts them.
+    frames: usize,
     stack: &'s Stack,
+}
+
+/// A caller's own `ReindentFilter` as found on the instance (see [`Reindent::with_state`]).
+#[allow(dead_code)] // made by port.rs; the examples take this file without it
+pub(crate) struct ReindentFound {
+    pub(crate) n: String,
+    pub(crate) ch: String,
+    pub(crate) width: i64,
+    pub(crate) indent: i64,
+    pub(crate) offset: i64,
+    pub(crate) wrap_after: i64,
+    pub(crate) comma_first: bool,
+    pub(crate) indent_columns: bool,
+    pub(crate) compact: bool,
+    /// `len(self._last_func.value)`, None while `_last_func` is None.
+    pub(crate) last_func_len: Option<i64>,
+    /// `str(self._last_stmt).endswith('\n')`, None while `_last_stmt` is None.
+    pub(crate) last_stmt_nl: Option<bool>,
 }
 
 pub(crate) struct ReindentOptions {
@@ -541,8 +626,12 @@ pub(crate) struct ReindentOptions {
 
 impl<'s> Reindent<'s> {
     pub(crate) fn new(o: &ReindentOptions, stack: &'s Stack) -> Reindent<'s> {
+        let ch = if o.tabs { '\t' } else { ' ' };
         Reindent {
-            ch: if o.tabs { '\t' } else { ' ' },
+            n: "\n".into(),
+            ch: ch.into(),
+            ch_len: 1,
+            single: Some(ch),
             width: o.width.into(),
             indent: i128::from(o.indent_after_first),
             offset: 0,
@@ -551,7 +640,37 @@ impl<'s> Reindent<'s> {
             indent_columns: o.indent_columns,
             compact: o.compact,
             last_func_len: None,
+            last_func: None,
             last_stmt_nl: None,
+            frames: 5,
+            stack,
+        }
+    }
+
+    /// A caller's own `ReindentFilter` in its state as found, run from `FilterStack.run`.
+    #[allow(dead_code)] // called by port.rs; the examples take this file without it
+    pub(crate) fn with_state(f: ReindentFound, stack: &'s Stack) -> Reindent<'s> {
+        let mut chars = f.ch.chars();
+        let single = match (chars.next(), chars.next()) {
+            (Some(c), None) if f.n == "\n" => Some(c),
+            _ => None,
+        };
+        Reindent {
+            ch_len: pystr::len(&f.ch) as i128,
+            n: f.n,
+            ch: f.ch,
+            single,
+            width: f.width.into(),
+            indent: f.indent.into(),
+            offset: f.offset.into(),
+            wrap_after: f.wrap_after.into(),
+            comma_first: f.comma_first,
+            indent_columns: f.indent_columns,
+            compact: f.compact,
+            last_func_len: f.last_func_len.map(i128::from),
+            last_func: None,
+            last_stmt_nl: f.last_stmt_nl,
+            frames: 4,
             stack,
         }
     }
@@ -608,12 +727,17 @@ impl<'s> Reindent<'s> {
         Ok(length)
     }
 
+    /// `_current_line_len(token) - len(self.char * self.leading_ws)`.
     fn get_offset(&self, t: &Tree, token: Id) -> Result<i128, String> {
-        Ok(self.current_line_len(t, token)? - self.leading_ws().max(0))
+        Ok(self.current_line_len(t, token)? - self.ch_len * self.leading_ws().max(0))
     }
 
     fn nl(&self, t: &mut Tree, offset: i128) -> Result<Id, String> {
-        let v = repeat("\n", self.ch, self.leading_ws() + offset)?;
+        let k = self.leading_ws() + offset;
+        let v = match self.single {
+            Some(c) => repeat("\n", c, k)?,
+            None => repeat_str(&self.n, &self.ch, k)?,
+        };
         Ok(t.new_token(tt::WHITESPACE, v))
     }
 
@@ -667,6 +791,7 @@ impl<'s> Reindent<'s> {
             Cls::Function => {
                 let first = *t.tokens(l).first().ok_or_else(index_error)?;
                 self.last_func_len = Some(pystr::len(t.value(first)) as i128);
+                self.last_func = Some(first);
                 self.process_default(t, l, true, frames + 2)
             }
             Cls::IdentifierList => self.process_identifierlist(t, l, frames + 1),
@@ -721,14 +846,14 @@ impl<'s> Reindent<'s> {
         let num_offset = if self.indent_columns {
             let id0 = *identifiers.first().ok_or_else(index_error)?;
             t.first_leaf(id0).ok_or_else(stop_iteration)?;
-            if self.ch == '\t' { 1 } else { self.width }
+            if self.ch == "\t" { 1 } else { self.width }
         } else {
             if identifiers.is_empty() {
                 return Err("IndexError: pop from empty list".into());
             }
             let id0 = identifiers.remove(0);
             let first = t.first_leaf(id0).ok_or_else(stop_iteration)?;
-            if self.ch == '\t' {
+            if self.ch == "\t" {
                 1
             } else {
                 self.get_offset(t, first)?
@@ -910,8 +1035,8 @@ impl<'s> Reindent<'s> {
     /// `ReindentFilter.process(stmt)`; the caller reports how the statement ended with `finish`.
     pub(crate) fn run(&mut self, t: &mut Tree) -> Result<(), String> {
         // format, FilterStack.run, ReindentFilter.process, then _process, format being one level up as for
-        // grouping
-        self.process(t, ROOT, 5)?;
+        // grouping (from run itself, one less)
+        self.process(t, ROOT, self.frames)?;
         if let Some(ends_nl) = self.last_stmt_nl {
             let nl = t.new_token(tt::WHITESPACE, if ends_nl { "\n" } else { "\n\n" }.into());
             t.n[ROOT].tokens.insert(0, nl);
@@ -928,27 +1053,76 @@ impl<'s> Reindent<'s> {
 // ---------------------------------------------------------------- AlignedIndentFilter
 
 pub(crate) struct Aligned<'s> {
-    ch: char,
+    /// `self.n`, `self.char`, `self.offset`, `self.indent`, `self._max_kwd_len`.
+    n: String,
+    ch: String,
     offset: i128,
     indent: i128,
+    max_kwd_len: i128,
     stack: &'s Stack,
+    /// Where the filter's own frames start, counted as `run` counts them.
+    frames: usize,
+    /// `_process_statement`'s `sql.TokenList(tlist.tokens)`, when asked to keep it: see [`TempList`].
+    keep_temp: bool,
+    pub(crate) temp: Option<TempList>,
 }
 
-const MAX_KWD_LEN: i128 = 6;
+/// The `TokenList` that `AlignedIndentFilter._process_statement` wraps the statement's token list in and
+/// processes: it takes the statement's children as their parent (and every token later inserted at the top),
+/// and shares the statement's `tokens` list unless that list was empty (`tokens or []` makes a new one). Its
+/// value is the children's values joined when it was made.
+#[allow(dead_code)] // read by port.rs; the examples take this file without it
+pub(crate) struct TempList {
+    pub(crate) value: String,
+    pub(crate) shares_tokens: bool,
+}
 
 impl<'s> Aligned<'s> {
+    /// As `format(reindent_aligned=True)` makes it: `AlignedIndentFilter(char=indent_char)`.
     pub(crate) fn new(tabs: bool, stack: &'s Stack) -> Aligned<'s> {
         Aligned {
-            ch: if tabs { '\t' } else { ' ' },
+            n: "\n".into(),
+            ch: if tabs { "\t" } else { " " }.into(),
             offset: 0,
             indent: 0,
+            max_kwd_len: 6,
             stack,
+            frames: 5,
+            keep_temp: false,
+            temp: None,
+        }
+    }
+
+    /// A caller's own `AlignedIndentFilter` in its state as found, run from `FilterStack.run`.
+    #[allow(dead_code)] // called by port.rs; the examples take this file without it
+    pub(crate) fn with_state(
+        n: String,
+        ch: String,
+        offset: i128,
+        indent: i128,
+        max_kwd_len: i128,
+        stack: &'s Stack,
+    ) -> Aligned<'s> {
+        Aligned {
+            n,
+            ch,
+            offset,
+            indent,
+            max_kwd_len,
+            stack,
+            frames: 4,
+            keep_temp: true,
+            temp: None,
         }
     }
 
     fn nl(&self, t: &mut Tree, offset: i128) -> Result<Id, String> {
-        let indent = self.indent * (2 + MAX_KWD_LEN);
-        let v = repeat("\n", self.ch, MAX_KWD_LEN + offset + indent + self.offset)?;
+        let indent = self.indent * (2 + self.max_kwd_len);
+        let v = repeat_str(
+            &self.n,
+            &self.ch,
+            self.max_kwd_len + offset + indent + self.offset,
+        )?;
         Ok(t.new_token(tt::WHITESPACE, v))
     }
 
@@ -975,6 +1149,16 @@ impl<'s> Aligned<'s> {
             t.n[l].tokens.remove(0);
         }
         // self._process(sql.TokenList(tlist.tokens)): a TokenList over the same list, so _process_default
+        if self.keep_temp {
+            let mut value = String::new();
+            for &c in t.tokens(l) {
+                value.push_str(t.value(c));
+            }
+            self.temp = Some(TempList {
+                value,
+                shares_tokens: !t.tokens(l).is_empty(),
+            });
+        }
         self.process_default(t, l, frames + 2)
     }
 
@@ -1043,7 +1227,10 @@ impl<'s> Aligned<'s> {
                 t.insert_before(l, idx, nl);
             }
             if let Some(c) = cond {
-                let ws = t.new_token(tt::WHITESPACE, repeat("", self.ch, max_width - widths[i])?);
+                let ws = t.new_token(
+                    tt::WHITESPACE,
+                    repeat_str("", &self.ch, max_width - widths[i])?,
+                );
                 let idx = t.token_index(l, c[c.len() - 1])?;
                 t.insert_after(l, idx, ws, true);
             }
@@ -1092,7 +1279,8 @@ impl<'s> Aligned<'s> {
 
     /// `AlignedIndentFilter.process(stmt)`.
     pub(crate) fn run(&mut self, t: &mut Tree) -> Result<(), String> {
-        // format, FilterStack.run, AlignedIndentFilter.process, then _process (format one level up)
-        self.process(t, ROOT, 5)
+        // format, FilterStack.run, AlignedIndentFilter.process, then _process (format one level up); from a
+        // caller's FilterStack.run, one less
+        self.process(t, ROOT, self.frames)
     }
 }

@@ -18,8 +18,9 @@ the original sqlparse, unchanged, unless all of this holds:
 
 - the installed sqlparse is 0.6.1 (with any other version every call goes to sqlparse, and install() does
   nothing);
-- `sql` is a `str` (not bytes, not a stream, not a subclass); `encoding` is then not used, as in sqlparse,
-  which only decodes bytes with it;
+- `sql` is a `str` (not a subclass), or bytes or a text stream that sqlparse's lexer would make one: the stream
+  is read and the bytes decoded here exactly as sqlparse does it (`encoding`, else UTF-8, else
+  `unicode-escape`), at the point sqlparse does it; `encoding` is not used for a `str`, as in sqlparse;
 - sqlparse's default lexer is as sqlparse sets it up (no add_keywords, set_SQL_REGEX, clear), and nothing in
   sqlparse's modules or classes was replaced, added or removed since this package was imported (a patched
   grouping function, filter or method goes to sqlparse, which uses it);
@@ -38,7 +39,10 @@ message, and so does a statement nested past Python's recursion limit, at the sa
 as there, raised from a RecursionError.
 """
 
+import itertools as _itertools
 import unicodedata as _unicodedata
+from io import TextIOBase as _TextIOBase
+from sys import _getframe, getrecursionlimit as _getrecursionlimit
 
 import sqlparse
 import sqlparse.engine.filter_stack
@@ -107,7 +111,24 @@ def _drift_check():
     return ported
 
 
-_text_ported = _drift_check()
+_drift_ported = _drift_check()
+
+# The port keeps a statement's text positions in 32 bits: texts this long (2 GiB of UTF-8 at most) are sqlparse's.
+_MAX_TEXT = 1 << 29
+
+
+def _text_ported(text):
+    """str -> bool: whether the Rust takes the text (its length, its characters)."""
+    return len(text) < _MAX_TEXT and _drift_ported(text)
+
+
+# Raised by the Rust for a statement deep enough, from a caller standing near Python's recursion limit, that a
+# grouping pass which does not count frames could reach the limit (see group() in grouping.rs): the statement
+# then goes to sqlparse.
+_Deep = _native.Deep
+# Raised by the Rust when a call's output would grow past what it makes without risk (see INDENT_BUDGET in
+# filters.rs): the call then goes to sqlparse, which makes that output itself or raises MemoryError.
+_Oversize = _native.Oversize
 
 _BOOL, _INT, _OPT_INT, _STR, _OPT_STR = range(5)
 _OPTIONS = {
@@ -152,10 +173,10 @@ def _ported_options(options):
             if t is not bool:
                 return None
         elif kind is _OPT_STR:
-            if value is not None and t is not str:
+            if value is not None and (t is not str or not _text_ported(value)):
                 return None
         elif kind is _STR:
-            if t is not str:
+            if t is not str or not _text_ported(value):
                 return None
         elif kind is _INT or kind is _OPT_INT:
             if kind is _OPT_INT and value is None:
@@ -173,36 +194,50 @@ def _ported_options(options):
 # (held, so compared by identity), their sizes, and SQL_REGEX by content. A rules list seen to match is
 # remembered, so the common call compares one reference.
 _default_keywords = None
-_default_sizes = None
 _default_rx = None
-_rx_seen = None
+_rx_items = []
 
 
 def _regex_content(rx_list):
     return [(m.__self__.pattern, m.__self__.flags, tt) for m, tt in rx_list]
 
 
-def _lexer_ported():
-    global _default_keywords, _default_sizes, _default_rx, _rx_seen
+def _default_lexer():
+    """sqlparse's keyword dicts as its default lexer holds them, and its rules by content."""
+    global _default_keywords, _default_rx
     if _default_keywords is None:
         ref = _lexer.Lexer()
         ref.default_initialization()
         _default_keywords = list(ref._keywords)
-        _default_sizes = [len(d) for d in _default_keywords]
         _default_rx = _regex_content(ref._SQL_REGEX)
+    return _default_keywords
+
+
+def _lexer_ported():
+    """The default lexer as sqlparse sets it up: its keyword dicts the very dicts sqlparse's keywords module
+    holds (their content is watched with sqlparse's namespaces), its rules list the very rules found to be
+    sqlparse's (a rule replaced, added or removed in place shows), or equal to them by content. The common case,
+    the very objects last found, is answered by the Rust in one call."""
+    fast = _native.lexer_ported()
+    if fast is not None:
+        return fast
+    global _rx_items
+    defaults = _default_lexer()
     lx = _lexer.Lexer.get_default_instance()
     kws = lx._keywords
-    if len(kws) != len(_default_keywords):
+    if len(kws) != len(defaults):
         return False
-    for d, default, size in zip(kws, _default_keywords, _default_sizes):
-        if d is not default or len(d) != size:
+    for d, default in zip(kws, defaults):
+        if d is not default:
             return False
     rx = lx._SQL_REGEX
-    if rx is _rx_seen:
+    if type(rx) is list and _native.same_items(rx, _rx_items):
         return True
     if _regex_content(rx) != _default_rx:
         return False
-    _rx_seen = rx
+    if type(rx) is list:
+        _rx_items = list(rx)
+        _native.set_lexer_reference(_lexer.Lexer, defaults, _rx_items)
     return True
 
 
@@ -217,15 +252,53 @@ def _raise_recursion():
         raise _SQLParseError(_RECURSION) from err
 
 
+# What sqlparse's lexer reads before it lexes: a text stream, or bytes it decodes.
+_READ = (_TextIOBase, bytes)
+
+
+def _text_of(sql, encoding):
+    """What sqlparse's Lexer.get_tokens makes of a text stream or bytes before lexing: the same calls in the same
+    order, so the same result and the same errors (a read() that fails, a UnicodeDecodeError, a TypeError for a
+    stream that reads neither str nor bytes)."""
+    if isinstance(sql, _TextIOBase):
+        sql = sql.read()
+    if isinstance(sql, str):
+        return sql
+    if isinstance(sql, bytes):
+        if encoding:
+            return sql.decode(encoding)
+        try:
+            return sql.decode('utf-8')
+        except UnicodeDecodeError:
+            return sql.decode('unicode-escape')
+    raise TypeError(f"Expected text or file-like object, got {type(sql)!r}")
+
+
+def _read(sql, encoding):
+    """_text_of, with a RecursionError turned into sqlparse's SQLParseError as its FilterStack.run does."""
+    try:
+        return _text_of(sql, encoding)
+    except RecursionError as err:
+        raise _SQLParseError(_RECURSION) from err
+
+
 def format(sql, encoding=None, **options):
     """sqlparse.format(): *sql* formatted according to *options* (see sqlparse's documentation)."""
-    ported = _ported_options(options) if _ported and type(sql) is str else None
-    if ported is not None and _text_ported(sql) and _sqlparse_untouched():
+    try:
+        ported = _ported_options(options) if _ported else None
+        if ported is not None and type(sql) is not str and isinstance(sql, _READ) and _sqlparse_untouched():
+            # sqlparse checks the options first, then its lexer reads the stream or decodes the bytes
+            sqlparse.formatter.validate_options(dict(options))
+            sql = _read(sql, encoding)
+        fast = ported is not None and type(sql) is str and _text_ported(sql) and _sqlparse_untouched()
+    except RecursionError:  # a caller at the very limit: the checks cannot run, sqlparse's code below answers
+        fast = False
+    if fast:
         too_deep = False
         try:
             # Called from this frame: the Rust counts it in place of sqlparse.format's for the recursion limit.
             return _native.format(sql, **ported)
-        except UnicodeEncodeError:
+        except (UnicodeEncodeError, _Oversize, _Deep):
             pass
         except _SQLParseError as err:
             if err.args != (_RECURSION,):
@@ -233,23 +306,51 @@ def format(sql, encoding=None, **options):
             too_deep = True
         if too_deep:
             _raise_recursion()
-    return _original_format(sql, encoding, **options)
+    if not _ported:
+        return _original_format(sql, encoding, **options)
+    # sqlparse 0.6.1's format(), run here rather than called: a call it answers stands where sqlparse's own
+    # would, not one frame deeper, so it reaches the recursion limit at the same place
+    stack = sqlparse.engine.FilterStack()
+    options = sqlparse.formatter.validate_options(options)
+    stack = sqlparse.formatter.build_filter_stack(stack, options)
+    stack.postprocess.append(sqlparse.filters.SerializerUnicode())
+    return ''.join(stack.run(sql, encoding))
 
 
 def split(sql, encoding=None, strip_semicolon=False):
     """sqlparse.split(): the statements in *sql*, each stripped."""
-    if (
-        _ported
-        and type(sql) is str
-        and type(strip_semicolon) is bool
-        and _text_ported(sql)
-        and _sqlparse_untouched()
-    ):
+    try:
+        if (_ported and type(sql) is not str and isinstance(sql, _READ) and type(strip_semicolon) is bool
+                and _sqlparse_untouched()):
+            sql = _read(sql, encoding)
+        fast = (_ported and type(sql) is str and type(strip_semicolon) is bool and _text_ported(sql)
+                and _sqlparse_untouched())
+        if fast:
+            # The Rust split takes no Python frames, sqlparse's a few: a caller standing that close to the
+            # recursion limit gets sqlparse's code below, which fails where sqlparse's own would.
+            try:
+                _getframe(_getrecursionlimit() - _NEAR_LIMIT)
+            except ValueError:  # the usual case: the stack is not that deep
+                pass
+            else:
+                fast = False
+    except RecursionError:  # see format()
+        fast = False
+    if fast:
         try:
             return _native.split(sql, strip_semicolon)
         except UnicodeEncodeError:
             pass
-    return _sqlparse_split(sql, encoding, strip_semicolon)
+    if not _ported:
+        return _sqlparse_split(sql, encoding, strip_semicolon)
+    # sqlparse 0.6.1's split(), run here rather than called (see format())
+    stack = sqlparse.engine.FilterStack(strip_semicolon=strip_semicolon)
+    return [str(stmt).strip() for stmt in stack.run(sql, encoding)]
+
+
+# Frames from the recursion limit within which split() leaves the call to sqlparse's code (the margin the Rust
+# keeps for format and parse, MARGIN in grouping.rs)
+_NEAR_LIMIT = 256
 
 
 def _sqlparse_split(sql, encoding, strip_semicolon):
@@ -265,6 +366,9 @@ def split_many(sqls, encoding=None, strip_semicolon=False):
     sqls = list(sqls)
     out = [None] * len(sqls)
     if _ported and type(strip_semicolon) is bool and _sqlparse_untouched():
+        for i, sql in enumerate(sqls):
+            if type(sql) is not str and isinstance(sql, _READ):
+                sqls[i] = _read(sql, encoding)
         fast = [i for i, sql in enumerate(sqls) if type(sql) is str and _text_ported(sql)]
         if fast:
             try:
@@ -297,12 +401,18 @@ def parse(sql, encoding=None):
     """sqlparse.parse(): the statements in *sql*, grouped, as sqlparse's own objects (a tuple of
     `sqlparse.sql.Statement`). Grouped in Rust and built node for node as sqlparse leaves them; in sqlparse
     under the same conditions as format()."""
-    if _ported and type(sql) is str and _text_ported(sql) and _sqlparse_untouched():
+    try:
+        if _ported and type(sql) is not str and isinstance(sql, _READ) and _sqlparse_untouched():
+            sql = _read(sql, encoding)
+        fast = _ported and type(sql) is str and _text_ported(sql) and _sqlparse_untouched()
+    except RecursionError:  # see format()
+        fast = False
+    if fast:
         too_deep = False
         try:
             # Called from this frame: the Rust counts it in place of sqlparse.parse's for the recursion limit.
             return _native.parse(sql)
-        except UnicodeEncodeError:
+        except (UnicodeEncodeError, _Deep):
             pass
         except _SQLParseError as err:
             if err.args != (_RECURSION,):
@@ -310,13 +420,20 @@ def parse(sql, encoding=None):
             too_deep = True
         if too_deep:
             _raise_recursion()
-    return _original_parse(sql, encoding)
+    if not _ported:
+        return _original_parse(sql, encoding)
+    # sqlparse 0.6.1's parse(), run here rather than called (see format())
+    return tuple(sqlparse.parsestream(sql, encoding))
 
 
 def _get_tokens(self, text, encoding=None):
     """sqlparse's Lexer.get_tokens, with install(): sqlparse's default lexer, as sqlparse sets it up, on a `str`
     the Rust takes, tokenizes in Rust; anything else (another Lexer, a changed one, bytes, a stream) goes to
-    sqlparse's own. Same (token type, value) pairs, same token type objects."""
+    sqlparse's own. Same (token type, value) pairs, same token type objects. A stream is read and bytes decoded
+    as sqlparse's would, when the first token is asked for."""
+    if (self is _lexer.Lexer._default_instance and type(text) is not str and isinstance(text, _READ)
+            and _sqlparse_untouched()):
+        text = _text_of(text, encoding)
     if (self is _lexer.Lexer._default_instance and type(text) is str and _text_ported(text)
             and _sqlparse_untouched()):
         try:
@@ -329,44 +446,184 @@ def _get_tokens(self, text, encoding=None):
     yield from _original_get_tokens(self, text, encoding)
 
 
+def _first_filter(stmtprocess):
+    """The stack's first statement filter and its state, when the Rust can run it in its place: sqlparse's own
+    AlignedIndentFilter or ReindentFilter, nothing on the instance but what __init__ sets, every value of the type
+    and within the size the port takes (larger ones make Python strings the port does not risk). Returns (filter,
+    AlignedIndentFilter state, ReindentFilter state), one of the states None; _NO_FIRST when the Rust cannot.
+
+    A ReindentFilter's state includes str(_last_stmt).endswith('\\n'), which its process() takes after it has
+    processed the statement: taken here, from the frame where process() would run, before (nothing the filter does
+    to this statement changes the last one), so a RecursionError comes from the same depth; it then goes to the
+    Python filter."""
+    if type(stmtprocess) is not list or not stmtprocess:
+        return _NO_FIRST
+    f = stmtprocess[0]
+    kind = type(f)
+    if kind is not _AlignedIndentFilter and kind is not _ReindentFilter:
+        return _NO_FIRST
+    d = getattr(f, '__dict__', None)
+    if type(d) is not dict:
+        return _NO_FIRST
+    if kind is _AlignedIndentFilter:
+        if d.keys() != _ALIGNED_KEYS:
+            return _NO_FIRST
+        n, ch, off, ind, kwd = d['n'], d['char'], d['offset'], d['indent'], d['_max_kwd_len']
+        if (type(n) is str and type(ch) is str and type(off) is int and type(ind) is int and type(kwd) is int
+                and len(n) <= 64 and len(ch) <= 16 and -100 <= off <= 100 and -100 <= ind <= 100
+                and 0 <= kwd <= 100 and (n.isascii() or _utf8(n)) and (ch.isascii() or _utf8(ch))):
+            return f, (n, ch, off, ind, kwd), None
+        return _NO_FIRST
+    if d.keys() != _REINDENT_KEYS:
+        return _NO_FIRST
+    n, ch, width, ind, off, wrap = d['n'], d['char'], d['width'], d['indent'], d['offset'], d['wrap_after']
+    comma_first, indent_columns, compact = d['comma_first'], d['indent_columns'], d['compact']
+    last_stmt, last_func = d['_last_stmt'], d['_last_func']
+    if not (type(n) is str and type(ch) is str and type(width) is int and type(ind) is int and type(off) is int
+            and type(wrap) is int and type(comma_first) is bool and type(indent_columns) is bool
+            and type(compact) is bool and len(n) <= 64 and len(ch) <= 16 and -4096 <= width <= 4096
+            and -64 <= ind <= 64 and -4096 <= off <= 4096 and -_WRAP_RANGE <= wrap <= _WRAP_RANGE
+            and (n.isascii() or _utf8(n)) and (ch.isascii() or _utf8(ch))):
+        return _NO_FIRST
+    if last_func is None:
+        func_len = None
+    elif type(last_func) in _SQL_CLASSES and type(last_func.value) is str:
+        func_len = len(last_func.value)
+    else:
+        return _NO_FIRST
+    if last_stmt is None:
+        ends_nl = None
+    elif type(last_stmt) is _sql.Statement:
+        ends_nl = str(last_stmt).endswith('\n')
+    else:
+        return _NO_FIRST
+    return f, None, (n, ch, width, ind, off, wrap, comma_first, indent_columns, compact, func_len, ends_nl)
+
+
+def _utf8(text):
+    try:
+        text.encode('utf-8')
+    except UnicodeEncodeError:  # lone surrogates
+        return False
+    return True
+
+
+_AlignedIndentFilter = sqlparse.filters.aligned_indent.AlignedIndentFilter
+_ALIGNED_KEYS = frozenset(vars(_AlignedIndentFilter()))
+_ReindentFilter = sqlparse.filters.reindent.ReindentFilter
+_REINDENT_KEYS = frozenset(vars(_ReindentFilter()))
+_WRAP_RANGE = 1 << 62
+_SQL_CLASSES = frozenset(c for c in vars(_sql).values() if isinstance(c, type) and issubclass(c, _sql.Token))
+_NO_FIRST = (None, None, None)
+_filter_stack = sqlparse.engine.filter_stack
+
+
 def _run(self, sql, encoding=None):
-    """sqlparse's FilterStack.run, with install(): a stack with grouping on and no token-stream filters gets its
-    statements grouped in Rust (the objects parse() returns, as sqlparse's own run has them at that point) and runs
-    its statement filters and serializers on them in Python. Anything else gets sqlparse's own run, returned as
-    is (no frame of ours under it). Which one is decided here, when run() is called; sqlparse's reads the stack's
-    filters when the first statement is asked for, so a filter added in between is the one difference."""
-    if self._grouping and not self.preprocess and type(sql) is str and _text_ported(sql) and _sqlparse_untouched():
-        return _run_grouped(self, sql, encoding)
-    return _original_run(self, sql, encoding)
-
-
-def _run_grouped(self, sql, encoding):
-    # a generator, as sqlparse's run: nothing happens until the first statement is asked for
-    too_deep = False
+    """sqlparse's FilterStack.run, with install(). A generator, as sqlparse's: calling it does nothing, and its frame
+    stands where sqlparse's stands. When the first statement is asked for, a stack with grouping on and no
+    token-stream filters on a text the Rust takes gets its statements grouped in Rust, one at a time as
+    sqlparse's run does (the objects parse() returns, as sqlparse's run has them at that point; a leading
+    AlignedIndentFilter or ReindentFilter of sqlparse's run in Rust as well, the filter's instance left as its
+    process() leaves it), and runs the rest of its statement filters and its serializers on them in Python.
+    Anything else runs sqlparse's own run, here in this frame."""
     statements = None
     try:
-        # Called from this generator, which stands where sqlparse's run stands: the Rust counts it so.
-        statements = _native.parse(sql, True)
-    except UnicodeEncodeError:
-        pass
-    except _SQLParseError as err:
-        if err.args != (_RECURSION,):
-            raise
-        too_deep = True
-    if too_deep:
-        _raise_recursion()
+        if self._grouping and not self.preprocess and _sqlparse_untouched():
+            if type(sql) is not str and isinstance(sql, _READ):
+                sql = _read(sql, encoding)
+            if type(sql) is str and _text_ported(sql):
+                statements = _native.statements(sql)
+    except (UnicodeEncodeError, RecursionError):  # RecursionError: the checks, from a caller at the very limit
+        statements = None
     if statements is None:
-        yield from _original_run(self, sql, encoding)
+        # sqlparse 0.6.1's FilterStack.run, run here rather than called (its frames, not one more)
+        try:
+            stream = _filter_stack.lexer.tokenize(sql, encoding)
+            for filter_ in self.preprocess:
+                stream = filter_.process(stream)
+            stream = _filter_stack.StatementSplitter().process(stream)
+            for stmt in stream:
+                if self._grouping:
+                    stmt = _filter_stack.grouping.group(stmt)
+                for filter_ in self.stmtprocess:
+                    filter_.process(stmt)
+                for filter_ in self.postprocess:
+                    stmt = filter_.process(stmt)
+                yield stmt
+        except RecursionError as err:
+            raise _filter_stack.SQLParseError(_RECURSION) from err
         return
-    try:
-        for stmt in statements:
-            for filter_ in self.stmtprocess:
+    while True:
+        if not self._grouping:
+            # grouping turned off since the first statement (sqlparse's run looks at it for each one): the next
+            # statement as sqlparse's splitter makes it, filtered from this frame
+            try:
+                if not statements.skip():
+                    return
+                stmt = _sql.Statement([_sql.Token(ttype, value) for ttype, value in statements.last_tokens()])
+                for filter_ in self.stmtprocess:
+                    filter_.process(stmt)
+                for filter_ in self.postprocess:
+                    stmt = filter_.process(stmt)
+            except RecursionError as err:
+                raise _filter_stack.SQLParseError(_RECURSION) from err
+            yield stmt
+            continue
+        too_deep = deep = False
+        try:
+            first, aligned, reindent = _first_filter(self.stmtprocess)
+        except RecursionError:  # at the very limit: the Python filter runs instead
+            first = aligned = reindent = None
+        try:
+            # Called from this generator, which stands where sqlparse's run stands: the Rust counts it so.
+            got = statements.next(aligned, reindent)
+        except _Deep:
+            deep = True
+        except RecursionError as err:
+            # a Python call the Rust makes failed at the very limit: so would sqlparse's splitting and grouping
+            # of the next statement, inside its run
+            raise _filter_stack.SQLParseError(_RECURSION) from err
+        except _SQLParseError as err:
+            if err.args != (_RECURSION,):
+                raise
+            too_deep = True
+        if too_deep:
+            # sqlparse's run turns the RecursionError into this, `from` it (raised here, not in a helper's frame)
+            try:
+                raise RecursionError('maximum recursion depth exceeded')
+            except RecursionError as err:
+                raise _filter_stack.SQLParseError(_RECURSION) from err
+        if deep:
+            # this statement as sqlparse's splitter makes it, grouped and filtered by sqlparse from this frame
+            try:
+                stmt = _sql.Statement([_sql.Token(ttype, value) for ttype, value in statements.last_tokens()])
+                stmt = _filter_stack.grouping.group(stmt)
+                for filter_ in self.stmtprocess:
+                    filter_.process(stmt)
+                for filter_ in self.postprocess:
+                    stmt = filter_.process(stmt)
+            except RecursionError as err:
+                raise _filter_stack.SQLParseError(_RECURSION) from err
+            yield stmt
+            continue
+        if got is None:
+            return
+        stmt, first_done, last_func = got
+        if first_done and reindent is not None:
+            # what ReindentFilter.process leaves on the instance
+            first._curr_stmt = stmt
+            if last_func is not None:
+                first._last_func = last_func
+            first._last_stmt = stmt
+        try:
+            # the stack's own list, as sqlparse iterates it, past the first filter if the Rust ran it
+            for filter_ in _itertools.islice(self.stmtprocess, 1, None) if first_done else self.stmtprocess:
                 filter_.process(stmt)
             for filter_ in self.postprocess:
                 stmt = filter_.process(stmt)
-            yield stmt
-    except RecursionError as err:
-        raise _SQLParseError(_RECURSION) from err
+        except RecursionError as err:
+            raise _filter_stack.SQLParseError(_RECURSION) from err
+        yield stmt
 
 
 # Everything of sqlparse the Rust reproduces: its modules' names and its classes' attributes, as imported. Where
@@ -407,6 +664,10 @@ def _watch():
                 allowed = [value]
             entries.append((name, allowed, type(value) in (int, float, str, bytes, bool, tuple, frozenset)))
         watch.append((namespace, isinstance(owner, type), entries))
+    # the default lexer's keyword dicts: every keyword with the very token type it had (a keyword retyped,
+    # added or removed in place shows)
+    for kwdict in _default_lexer():
+        watch.append((kwdict, True, [(name, [value], False) for name, value in kwdict.items()]))
     _native.set_watch(watch)
     return [namespace for namespace, _, _ in watch]
 
@@ -414,53 +675,34 @@ def _watch():
 _watched_dicts = _watch() if _ported else []
 
 # Comparing every watched name costs a few microseconds a call. CPython 3.12+ can tell us instead when one of
-# these dicts changes (a dict watcher): the comparison then runs once after a change, not on every call. On
-# older Pythons, or when no watcher can be had, it runs on every call.
-_changed = [True]  # a change not yet compared; True until the first comparison
-
-
+# these dicts changes (a dict watcher): the comparison then runs only after a change, not on every call. The
+# watcher's callback is the Rust's own C function, which counts the change and runs no Python code (so no other
+# thread can slip in between the count and the change, and nothing runs Python at shutdown). On older Pythons,
+# or when no watcher can be had, the comparison runs on every call.
 def _add_watchers(dicts):
     import sys
 
     if sys.version_info < (3, 12) or sys.implementation.name != 'cpython':
         return False
     try:
-        import atexit
         import ctypes
 
         api = ctypes.pythonapi
-        callback_type = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p,
-                                         ctypes.c_void_p)
-        changed = _changed
-
-        def on_change(event, d, key, value):
-            changed[0] = True
-            return 0
-
-        callback = callback_type(on_change)
-        api.PyDict_AddWatcher.argtypes = [callback_type]
+        api.PyDict_AddWatcher.argtypes = [ctypes.c_void_p]
         api.PyDict_AddWatcher.restype = ctypes.c_int
         api.PyDict_Watch.argtypes = [ctypes.c_int, ctypes.py_object]
         api.PyDict_Watch.restype = ctypes.c_int
-        api.PyDict_ClearWatcher.argtypes = [ctypes.c_int]
-        api.PyDict_ClearWatcher.restype = ctypes.c_int
-        watcher = api.PyDict_AddWatcher(callback)
-        if watcher < 0:  # all of the interpreter's watcher slots are taken
-            return False
+        watcher = _native.watcher()  # taken by an earlier import of this package (a reload)
+        if watcher is None:
+            watcher = api.PyDict_AddWatcher(_native.watch_callback())
+            if watcher < 0:
+                return False
+            _native.set_watcher(watcher)
         for d in dicts:
             if api.PyDict_Watch(watcher, d) < 0:
-                api.PyDict_ClearWatcher(watcher)
                 return False
-    except (AttributeError, OSError, ValueError, TypeError, ctypes.ArgumentError):
+    except Exception:  # no ctypes, or no watcher to be had (RuntimeError when the interpreter's slots are taken)
         return False
-
-    def stop():
-        # before the interpreter tears modules down, which would call back into Python mid-shutdown
-        api.PyDict_ClearWatcher(watcher)
-        _changed[0] = True
-
-    atexit.register(stop)
-    _add_watchers.callback = callback  # the C function pointer lives as long as this object
     return True
 
 
@@ -471,12 +713,7 @@ def _sqlparse_untouched():
     """sqlparse as the Rust reproduces it: nothing replaced, and its default lexer as sqlparse sets it up."""
     if not _watching:
         return _native.untouched() and _lexer_ported()
-    if _changed[0]:
-        _changed[0] = False  # set again by a change that lands from here on
-        if not _native.untouched():
-            _changed[0] = True  # still different: compared again next call, in case it is put back
-            return False
-    return _lexer_ported()
+    return _native.untouched_watched() and _lexer_ported()
 
 
 def install():

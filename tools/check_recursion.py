@@ -59,6 +59,8 @@ def stack_run(run, kind):
         stack.enable_grouping()
         if kind == 'aligned':
             stack.stmtprocess.append(filters.AlignedIndentFilter())
+        if kind == 'reindent':
+            stack.stmtprocess.append(filters.ReindentFilter(wrap_after=20))
         if kind == 'list':
             return list(run(stack, t))
         stack.postprocess.append(filters.SerializerUnicode())
@@ -70,6 +72,8 @@ def py_call(fn, opts):
     if PACKAGE:
         if fn.startswith('run '):
             return stack_run(sqlparse_turbo._original_run, fn[4:])
+        if fn == 'split':
+            return sqlparse.split
         if fn == 'parse':
             return sqlparse.parse
         return lambda t: sqlparse.format(t, **opts)
@@ -82,6 +86,8 @@ def rs_call(fn, opts):
     if PACKAGE:
         if fn.startswith('run '):
             return stack_run(sqlparse_turbo._run, fn[4:])
+        if fn == 'split':
+            return sqlparse_turbo.split
         if fn == 'parse':
             return sqlparse_turbo.parse
         return lambda t: sqlparse_turbo.format(t, **opts)
@@ -110,7 +116,62 @@ RUN_SHAPES = [  # the package's FilterStack.run (install()) against sqlparse's
     ('FilterStack.run, BETWEEN chain, aligned', 'run aligned', {}, lambda n: 'select a ' + 'between ' * n),
     ('FilterStack.run, BETWEEN chain in parens, aligned', 'run aligned', {},
      lambda n: 'select (select a ' + 'between ' * n + ')'),
+    ('FilterStack.run, nested BEGIN, reindent', 'run reindent', {}, lambda n: 'BEGIN ' * n + 'END ' * n),
+    ('FilterStack.run, BETWEEN chain in parens, reindent', 'run reindent', {},
+     lambda n: 'select f(a, b); select (select a ' + 'between ' * n + ')'),
 ]
+
+
+# Fixed texts whose nesting (about 90 levels, under sqlparse's grouping limit of 100) runs passes and filters
+# that do not count frames; called from every depth over the last 320 frames before the limit, the outcome
+# (result, or the exception's class and message) must be sqlparse's at each.
+DEPTH_SHAPES = [
+    ('operator chain', 'parse', {}, 'select ' + '+'.join(['a'] * 95)),
+    ('operator chain, format', 'format', {'use_space_around_operators': True, 'strip_comments': True,
+                                          'strip_whitespace': True}, 'select ' + '+'.join(['a'] * 95)),
+    ('operator chain, reindent', 'format', {'reindent': True}, 'select ' + '+'.join(['a'] * 95)),
+    ('nested parens, comments', 'parse', {}, 'select ' + '(' * 90 + 'a -- c\n' + ')' * 90),
+    ('nested parens, comments, stripped', 'format', {'strip_comments': True}, 'select ' + '(' * 90 + 'a /* c */ b' + ')' * 90),
+    ('nested aliases', 'parse', {}, 'select ' + '(' * 60 + 'a' + ') x' * 60),
+    ('nested order by', 'parse', {}, 'select ' + '(select a from b order by c desc ' * 30 + ')' * 30),
+    ('operator chain, aligned run', 'run aligned', {}, 'select ' + '+'.join(['a'] * 95)),
+    ('nested calls, reindent run', 'run reindent', {},
+     'select ' + 'f(' * 45 + 'a, b' + ')' * 45 + '; select g(x, y) from t where a = 1'),
+    ('statements, split', 'split', {}, 'select a from t where x = 1; select 2; ' * 3),
+]
+
+
+def exact(f, text):
+    try:
+        f(text)
+        return 'ok'
+    except Exception as e:
+        return f'{type(e).__name__}: {str(e)[:40]}'
+
+
+def exact_at(extra, f, text):
+    if extra:
+        return exact_at(extra - 1, f, text)
+    return exact(f, text)
+
+
+def depth_check():
+    bad = 0
+    here, frame = 0, sys._getframe()
+    while frame:
+        here, frame = here + 1, frame.f_back
+    top = sys.getrecursionlimit() - here - 2  # exact_at and exact themselves still fit
+    for name, fn, opts, text in DEPTH_SHAPES:
+        p, r = py_call(fn, opts), rs_call(fn, opts)
+        diff = []
+        for extra in range(max(0, top - 320), top):
+            a, b = exact_at(extra, p, text), exact_at(extra, r, text)
+            if a != b:
+                diff.append((extra, a, b))
+        bad += len(diff)
+        print(f'{name}: {len(diff)} of the last 320 caller depths differ'
+              + (f', first at {diff[0][0]}: py {diff[0][1]} | rs {diff[0][2]}' if diff else ''), flush=True)
+    return bad
 
 
 def threshold(f, shape, lo=1):
@@ -143,6 +204,8 @@ def main():
                         bad += 1
                         line.append(f'  {how}+{extra} n={k}: py {a} rs {b}')
         print('\n'.join(line), flush=True)
+    if PACKAGE:
+        bad += depth_check()
     print('mismatches', bad)
     return 1 if bad else 0
 

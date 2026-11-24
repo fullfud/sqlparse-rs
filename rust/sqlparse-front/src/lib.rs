@@ -9,6 +9,7 @@ pub mod js;
 pub mod port;
 pub mod pyconv;
 pub mod pynum;
+pub mod slots;
 
 #[allow(unused_imports)]
 use pynum::Num;
@@ -18,6 +19,19 @@ use pynum::Num;
 /// Rust's own allocations only: Python's objects are still made by Python.
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+pyo3::create_exception!(
+    _native,
+    Deep,
+    pyo3::exceptions::PyException,
+    "A statement the Rust hands to sqlparse: deep enough, from a caller near Python's recursion limit, that a      grouping pass which does not count frames could reach the limit."
+);
+pyo3::create_exception!(
+    _native,
+    Oversize,
+    pyo3::exceptions::PyException,
+    "A call the Rust hands to sqlparse: its output grows past what the Rust makes without risk."
+);
 
 fn error(message: String) -> PyErr {
     use pyo3::exceptions as e;
@@ -53,6 +67,28 @@ fn error(message: String) -> PyErr {
         })
     }
     let (kind, text) = message.split_once(": ").unwrap_or(("", message.as_str()));
+    // the package's own hand-overs: made here, with no Python call (they come near the recursion limit)
+    match kind {
+        "sqlparse_turbo._Deep" => return Deep::new_err(text.to_string()),
+        "sqlparse_turbo._Oversize" => return Oversize::new_err(text.to_string()),
+        _ => {}
+    }
+    // `raise NotImplementedError`, a failed allocation's MemoryError: no arguments, not an empty message
+    if text.is_empty()
+        && let Some(err) = Python::attach(|py| -> Option<PyErr> {
+            let class = py.import("builtins").ok()?.getattr(kind).ok()?;
+            let class = class.cast_into::<pyo3::types::PyType>().ok()?;
+            if !class
+                .is_subclass_of::<pyo3::exceptions::PyException>()
+                .ok()?
+            {
+                return None;
+            }
+            Some(PyErr::from_value(class.call0().ok()?))
+        })
+    {
+        return err;
+    }
     let text = text.to_string();
     match kind {
         "TypeError" => e::PyTypeError::new_err(text),
@@ -305,18 +341,32 @@ fn set_sql_objects(
     let types = TOKEN_TYPES.get().ok_or_else(|| {
         pyo3::exceptions::PyRuntimeError::new_err("set_sql_objects: call set_token_types first")
     })?;
-    let types = Python::attach(|py| {
-        types
+    let (types, layout) = Python::attach(|py| -> PyResult<_> {
+        let types = types
             .iter()
             .map(|(k, v)| (k.clone(), v.clone_ref(py)))
-            .collect()
-    });
+            .collect();
+        let dict = pyo3::types::PyDict::new(py);
+        for (k, v) in &classes {
+            dict.set_item(k, v.bind(py))?;
+        }
+        Ok((types, slots::Layout::find(py, &dict)))
+    })?;
     let _ = SQL_OBJECTS.set(port::SqlObjects {
         classes,
         types,
         new,
+        layout,
     });
     Ok(())
+}
+
+/// `objects_direct`: whether sqlparse's objects are made and filled directly (see `slots`), not through
+/// `object.__new__` and `setattr` calls. For the checks.
+#[pyfunction]
+#[pyo3(name = "objects_direct")]
+fn objects_direct() -> bool {
+    SQL_OBJECTS.get().is_some_and(|o| o.layout.is_some())
 }
 
 /// `parse`: `sqlparse.parse(sql)`, grouped in Rust, as a tuple of sqlparse's own `Statement` objects. With
@@ -332,8 +382,103 @@ fn parse<'py>(
         pyo3::exceptions::PyRuntimeError::new_err("parse: set_sql_objects was not called")
     })?;
     let parsed = port::parse_trees(&sql, run).map_err(error)?;
-    let statements = parsed.to_python(py, objects);
-    pyo3::types::PyTuple::new(py, statements?)
+    let statements = gc_paused(py, || parsed.to_python(py, objects))?;
+    pyo3::types::PyTuple::new(py, statements)
+}
+
+/// `gc.isenabled`, `gc.disable`, `gc.enable`, as the package found them.
+static GC: std::sync::OnceLock<Option<[Py<PyAny>; 3]>> = std::sync::OnceLock::new();
+
+/// Python's cyclic garbage collector held off while sqlparse's objects are made. A tree is thousands of new
+/// objects, each of which counts towards the next collection, and each collection walks them all again: without
+/// this, collecting took two thirds of `parse()`. Nothing else runs meanwhile (no Python code is called while the
+/// objects are made, so no other thread gets the GIL), and the collector is on again before the objects are
+/// handed over, as it was; the next collection sees them once.
+fn gc_paused<'py, T>(py: Python<'py>, make: impl FnOnce() -> PyResult<T>) -> PyResult<T> {
+    struct On<'a, 'py>(Python<'py>, &'a Py<PyAny>);
+    impl Drop for On<'_, '_> {
+        fn drop(&mut self) {
+            let _ = self.1.bind(self.0).call0();
+        }
+    }
+    let gc = GC.get_or_init(|| {
+        let gc = py.import("gc").ok()?;
+        Some([
+            gc.getattr("isenabled").ok()?.unbind(),
+            gc.getattr("disable").ok()?.unbind(),
+            gc.getattr("enable").ok()?.unbind(),
+        ])
+    });
+    let Some([isenabled, disable, enable]) = gc else {
+        return make();
+    };
+    if !isenabled.bind(py).call0()?.is_truthy()? {
+        return make();
+    }
+    disable.bind(py).call0()?;
+    let _on = On(py, enable);
+    make()
+}
+
+/// `statements`: a caller's `FilterStack.run` with grouping, one statement at a time (see `port::Lazy`); None if
+/// the text cannot be taken (never expected).
+#[pyfunction]
+#[pyo3(name = "statements", signature = (sql))]
+fn statements(sql: String) -> Option<Statements> {
+    port::Lazy::new(sql).map(Statements)
+}
+
+#[pyclass(name = "Statements", module = "sqlparse_turbo._native")]
+struct Statements(port::Lazy);
+
+#[pymethods]
+impl Statements {
+    /// The next statement as sqlparse's own `Statement`, grouped now; whether the caller's first statement filter,
+    /// an `AlignedIndentFilter` whose state `aligned` gives or a `ReindentFilter` whose state `reindent` gives, was
+    /// run on it here; and the token that `ReindentFilter` set its `_last_func` to (None: not set). None after the
+    /// last statement.
+    #[pyo3(signature = (aligned=None, reindent=None))]
+    #[allow(clippy::type_complexity)]
+    fn next<'py>(
+        &mut self,
+        py: Python<'py>,
+        aligned: Option<port::AlignedState>,
+        reindent: Option<port::ReindentState>,
+    ) -> PyResult<Option<(Bound<'py, PyAny>, bool, Option<Bound<'py, PyAny>>)>> {
+        let objects = SQL_OBJECTS.get().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("statements: set_sql_objects was not called")
+        })?;
+        let Some(grouped) = self.0.next(aligned, reindent).map_err(error)? else {
+            return Ok(None);
+        };
+        let (statement, last_func) = gc_paused(py, || grouped.to_python(py, objects))?;
+        Ok(Some((statement, grouped.filtered(), last_func)))
+    }
+
+    /// Takes the next statement without grouping it, for a stack whose grouping was turned off since the
+    /// first statement (`last_tokens` then gives it); false after the last.
+    fn skip(&mut self) -> bool {
+        self.0.skip()
+    }
+
+    /// The tokens of the statement `next` last took, as (token type object, text) pairs.
+    fn last_tokens<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyList>> {
+        use pyo3::types::{PyString, PyTuple};
+        let types = TOKEN_TYPES.get().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("last_tokens: set_token_types was not called")
+        })?;
+        let mut items = Vec::new();
+        for (ttype, value) in self.0.last_tokens() {
+            let t = types
+                .get(ttype)
+                .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(ttype))?;
+            items.push(PyTuple::new(
+                py,
+                [t.bind(py).clone(), PyString::new(py, value).into_any()],
+            )?);
+        }
+        pyo3::types::PyList::new(py, items)
+    }
 }
 
 /// One watched namespace: a module's `__dict__` or a class's own dict, whether it must keep its size (a class:
@@ -344,6 +489,135 @@ type WatchEntry = (Py<PyAny>, Option<Vec<Py<PyAny>>>, bool);
 type Watched = (Py<pyo3::types::PyDict>, bool, Vec<WatchEntry>);
 
 static WATCH: std::sync::OnceLock<Vec<Watched>> = std::sync::OnceLock::new();
+
+/// Changes the dict watcher has seen in sqlparse's namespaces, and the count `untouched_watched` last found
+/// them unchanged at (none yet: `u64::MAX`).
+static CHANGES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static CHECKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
+/// The watcher id the package got from `PyDict_AddWatcher` (kept here, across a reload of the package).
+static WATCHER: std::sync::OnceLock<i32> = std::sync::OnceLock::new();
+
+/// The dict watcher's callback (CPython 3.12+ `PyDict_WatchCallback`): counts a change, before the dict
+/// changes, within the same C call. It runs no Python code, so no other thread runs between the count and the
+/// change, and it is safe at interpreter shutdown.
+extern "C" fn on_dict_change(
+    _event: std::os::raw::c_int,
+    _dict: *mut pyo3::ffi::PyObject,
+    _key: *mut pyo3::ffi::PyObject,
+    _value: *mut pyo3::ffi::PyObject,
+) -> std::os::raw::c_int {
+    CHANGES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    0
+}
+
+/// `watch_callback`: the address of the callback, for the package to hand to `PyDict_AddWatcher`.
+#[pyfunction]
+#[pyo3(name = "watch_callback")]
+fn watch_callback() -> usize {
+    on_dict_change as *const () as usize
+}
+
+/// `watcher` / `set_watcher`: the watcher id, once the package has one.
+#[pyfunction]
+#[pyo3(name = "watcher")]
+fn watcher() -> Option<i32> {
+    WATCHER.get().copied()
+}
+
+#[pyfunction]
+#[pyo3(name = "set_watcher", signature = (id))]
+fn set_watcher(id: i32) {
+    let _ = WATCHER.set(id);
+}
+
+/// `untouched_watched`: `untouched()`, compared again only when the watcher has seen a change since it last
+/// held. A patch that stays in place is compared on every call (and found), so no call slips through to the
+/// Rust while it is there.
+#[pyfunction]
+#[pyo3(name = "untouched_watched")]
+fn untouched_watched(py: Python<'_>) -> bool {
+    use std::sync::atomic::Ordering::SeqCst;
+    let seen = CHANGES.load(SeqCst);
+    if CHECKED.load(SeqCst) == seen {
+        return true;
+    }
+    if !untouched(py) {
+        return false;
+    }
+    CHECKED.store(seen, SeqCst);
+    true
+}
+
+/// `same_items`: whether two lists hold the very same objects, in order (the lexer's rules against the ones
+/// found to be sqlparse's: a rule replaced in place shows).
+#[pyfunction]
+#[pyo3(name = "same_items", signature = (a, b))]
+fn same_items(a: &Bound<'_, pyo3::types::PyList>, b: &Bound<'_, pyo3::types::PyList>) -> bool {
+    use pyo3::types::PyListMethods;
+    a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x.is(&y))
+}
+
+/// sqlparse's `Lexer` class, the keyword dicts its default instance holds as sqlparse sets it up, and the rules
+/// last found to be sqlparse's: what `lexer_ported` compares against.
+struct LexerRef {
+    cls: Py<PyAny>,
+    keywords: Vec<Py<PyAny>>,
+    rules: Vec<Py<PyAny>>,
+}
+
+static LEXER_REF: std::sync::Mutex<Option<std::sync::Arc<LexerRef>>> = std::sync::Mutex::new(None);
+
+/// `set_lexer_reference`: the package hands over the `Lexer` class, its default keyword dicts and the rules found
+/// to be sqlparse's (again after it found other rules equal by content).
+#[pyfunction]
+#[pyo3(name = "set_lexer_reference", signature = (cls, keywords, rules))]
+fn set_lexer_reference(cls: Py<PyAny>, keywords: Vec<Py<PyAny>>, rules: Vec<Py<PyAny>>) {
+    if let Ok(mut r) = LEXER_REF.lock() {
+        *r = Some(std::sync::Arc::new(LexerRef {
+            cls,
+            keywords,
+            rules,
+        }));
+    }
+}
+
+/// `lexer_ported`: the default lexer's `_keywords` and `_SQL_REGEX`, both lists, against the reference, object
+/// by object: True when both hold the very same objects, False when the keyword dicts differ; None when the
+/// comparison cannot tell (no default instance yet, something other than a list, rules other than those last
+/// found), for the package to look closer.
+#[pyfunction]
+#[pyo3(name = "lexer_ported")]
+fn lexer_ported(py: Python<'_>) -> Option<bool> {
+    use pyo3::intern;
+    use pyo3::types::{PyList, PyListMethods};
+    // the reference taken out first: the lookups below may run Python code, which may call this again
+    let r = LEXER_REF.lock().ok()?.clone()?;
+    let inst = r
+        .cls
+        .bind(py)
+        .getattr(intern!(py, "_default_instance"))
+        .ok()?;
+    if inst.is_none() {
+        return None;
+    }
+    // item by item by address, without taking a reference to each (the rules are some eighty)
+    let same = |list: &Bound<'_, PyList>, refs: &[Py<PyAny>]| {
+        list.len() == refs.len()
+            && refs.iter().enumerate().all(|(i, r)| {
+                // SAFETY: `list` is a live list held here and `i` is below its length, read under the GIL with
+                // no Python code run in between; the borrowed pointer is only compared, never kept or used.
+                unsafe { pyo3::ffi::PyList_GetItem(list.as_ptr(), i as isize) == r.as_ptr() }
+            })
+    };
+    let kws = inst.getattr(intern!(py, "_keywords")).ok()?;
+    let kws = kws.cast_exact::<PyList>().ok()?;
+    if !same(kws, &r.keywords) {
+        return Some(false);
+    }
+    let rx = inst.getattr(intern!(py, "_SQL_REGEX")).ok()?;
+    let rx = rx.cast_exact::<PyList>().ok()?;
+    same(rx, &r.rules).then_some(true)
+}
 
 /// `set_watch`: sqlparse's namespaces as the package found them.
 #[pyfunction]
@@ -414,5 +688,17 @@ fn native_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(set_watch, m)?)?;
     m.add_function(wrap_pyfunction!(untouched, m)?)?;
     m.add_function(wrap_pyfunction!(drifted, m)?)?;
+    m.add_function(wrap_pyfunction!(statements, m)?)?;
+    m.add_function(wrap_pyfunction!(objects_direct, m)?)?;
+    m.add_function(wrap_pyfunction!(watch_callback, m)?)?;
+    m.add_function(wrap_pyfunction!(watcher, m)?)?;
+    m.add_function(wrap_pyfunction!(set_watcher, m)?)?;
+    m.add_function(wrap_pyfunction!(untouched_watched, m)?)?;
+    m.add_function(wrap_pyfunction!(same_items, m)?)?;
+    m.add_function(wrap_pyfunction!(set_lexer_reference, m)?)?;
+    m.add_function(wrap_pyfunction!(lexer_ported, m)?)?;
+    m.add("Deep", m.py().get_type::<Deep>())?;
+    m.add("Oversize", m.py().get_type::<Oversize>())?;
+    m.add_class::<Statements>()?;
     Ok(())
 }

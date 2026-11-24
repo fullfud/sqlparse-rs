@@ -2,6 +2,7 @@
 
     python -X utf8 tools/check_package.py [--quick] [part ...]     parts: corpus fallbacks inert lexer installed
                                                                   cli unicode lexswap many patches stacks
+                                                                  read
                                                                   (default: all)
 
 --quick takes every 8th corpus file and every 8th chunk of code points (CI runs it on every OS x Python and
@@ -23,7 +24,11 @@ the whole check once).
    recursion limit raises SQLParseError from a RecursionError, as sqlparse does.
 8. FilterStack.run (install() replaces it): stacks callers build themselves (grouping, the indent filters, a
    filter of their own, serializers) against sqlparse's run, trees and output; stacks with token-stream filters
-   or without grouping stay sqlparse's.
+   or without grouping stay sqlparse's. A caller's AlignedIndentFilter run in Rust: trees (the TokenList it
+   wraps the statement in included), output and the filter's state after the run.
+9. Text streams and bytes (read and decoded as sqlparse's lexer does) through format, split, parse,
+   parsestream, the lexer, split_many and a caller's stack: same result or error as sqlparse, the stream read
+   as many times, and in Rust.
 
 Exits 1 on any mismatch, so CI fails on it.
 """
@@ -41,7 +46,7 @@ from sqlparse.lexer import Lexer
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NATIVE = {sqlparse_turbo._native.format: 'format', sqlparse_turbo._native.split: 'split',
           sqlparse_turbo._native.lex: 'lex', sqlparse_turbo._native.split_many: 'split_many',
-          sqlparse_turbo._native.parse: 'parse'}
+          sqlparse_turbo._native.parse: 'parse', sqlparse_turbo._native.statements: 'parse'}
 counts = {'format': 0, 'split': 0, 'lex': 0, 'split_many': 0, 'parse': 0}
 
 
@@ -162,14 +167,14 @@ def fallbacks():
         ('indent_width=2**70', (sql,), {'reindent': True, 'indent_width': 2**70}),
         ('truncate_strings="3"', (sql,), {'truncate_strings': '3'}),
         ('keyword_case=Sub', (sql,), {'keyword_case': Sub('upper')}),
-        ('bytes', (sql.encode(),), {}),
-        ('bytes + encoding', (sql.encode('utf-16'), 'utf-16'), {}),
+        ('bytearray', (bytearray(sql.encode()),), {}),
+        ('bytes, an option of another type', (sql.encode(),), {'reindent': 1}),
         ('str subclass', (Sub(sql),), {'reindent': True}),
         # The two below do reach the Rust: the text cannot become UTF-8, the call raises UnicodeEncodeError before
         # any work, and the package hands it to sqlparse.
         ('lone surrogate', ('select \ud800 from t',), {'keyword_case': 'upper'}),
         ('lone surrogate in option', (sql,), {'truncate_strings': 3, 'truncate_char': '\udc80'}),
-        ('stream', (__import__('io').StringIO(sql),), {}),
+        ('stream, an option of another type', (__import__('io').StringIO(sql),), {'reindent': 1}),
     ]
     for name, args, opts in cases:
         rearm()
@@ -186,7 +191,7 @@ def fallbacks():
             bad += 1
     for name, args, kwargs in [('strip_semicolon=1', (sql,), {'strip_semicolon': 1}),
                                ('strip_semicolon=None', (sql,), {'strip_semicolon': None}),
-                               ('bytes', (sql.encode(),), {})]:
+                               ('bytes, strip_semicolon=1', (sql.encode(),), {'strip_semicolon': 1})]:
         before = native_calls()
         b = outcome(sqlparse_turbo.split, *args, **kwargs)
         ran = native_calls() - before
@@ -414,6 +419,9 @@ def lexer_swap():
     for _ in range(300 if QUICK else 3000):
         texts.append(''.join(r.choice(pieces) + r.choice([' ', '', '\n']) for _ in range(r.randint(1, 40))))
     texts += ['', ' ', 'select $$a$$ /* c */ --x\n$t$b$t$', "select 'unclosed", 'BEGIN ' * 120 + 'END ' * 120]
+    if not sqlparse_turbo._native.objects_direct():  # the trees below are made the direct way
+        print('sqlparse objects not made directly (slots layout not found)')
+        bad_add()
     lexed = sum(lexer_same(f'lexer swap {t[:50]!r}', t) for t in texts)
     # what the swap must leave to sqlparse's lexer
     from sqlparse import lexer
@@ -423,15 +431,13 @@ def lexer_swap():
     other = Lexer()
     other.default_initialization()
     list(other.get_tokens(sql))
-    list(lexer.tokenize(sql.encode()))
-    list(lexer.tokenize(__import__('io').StringIO(sql)))
     lx = Lexer.get_default_instance()
     lx.add_keywords({'FOO': tokens.Keyword})
     list(lexer.tokenize(sql))
     changed = [tree(s) for s in sqlparse.parse(sql)]
     lx.default_initialization()
     leaked = counts['lex'] - before
-    for args in ((sql.encode(),), (Sub(sql),), (sql.encode('utf-16'), 'utf-16'), ('select \ud800',)):
+    for args in ((Sub(sql),), (bytearray(sql.encode()),), ('select \ud800',)):
         before = counts['parse']
         a = plain(lambda: [tree(s) for s in sqlparse_turbo._original_parse(*args)])
         same(f'parse fallback {args!r}', a, outcome(lambda: [tree(s) for s in sqlparse.parse(*args)]))
@@ -570,6 +576,15 @@ def stacks():
                     self.process(token)
                 idx += 1
 
+    def grouping_off(stack):
+        """A filter that turns the stack's grouping off (sqlparse's run looks at it for every statement)."""
+        class Off:
+            __slots__ = ()
+
+            def process(self, stmt):
+                stack._grouping = False
+        return Off()
+
     def build(kind):
         stack = FilterStack()
         if kind != 'no grouping':
@@ -577,28 +592,89 @@ def stacks():
         if kind == 'aligned':
             stack.stmtprocess.append(filters.AlignedIndentFilter(char='&nbsp;', n='<br/>'))
             stack.stmtprocess.append(Bold())
-        elif kind == 'reindent':
+        elif kind in ('aligned trees', 'aligned first'):
+            stack.stmtprocess.append(filters.AlignedIndentFilter())
+        elif kind == 'aligned state':
+            f = filters.AlignedIndentFilter(char='\t', n='\r\n')
+            f.offset, f.indent, f._max_kwd_len = 3, 1, 9
+            stack.stmtprocess.append(f)
+        elif kind in ('reindent', 'reindent trees', 'reindent first'):
             stack.stmtprocess.append(filters.ReindentFilter())
+        elif kind == 'reindent html':  # as a page would show it, with a filter of the caller's own after it
+            stack.stmtprocess.append(filters.ReindentFilter(width=4, n='<br/>\n', wrap_after=30))
+            stack.stmtprocess.append(Bold())
+        elif kind == 'reindent nbsp':
+            # A `char` longer than one character: sqlparse measures a line in characters but an indent in units,
+            # so its offsets grow with every nesting level until the indent no longer fits in memory (the Python
+            # filter's MemoryError); short texts only.
+            stack.stmtprocess.append(filters.ReindentFilter(char='&nbsp;', n='<br/>', wrap_after=40))
+        elif kind == 'reindent options':
+            stack.stmtprocess.append(filters.ReindentFilter(
+                width=3, wrap_after=12, comma_first=True, indent_after_first=True, indent_columns=True,
+                compact=True))
+        elif kind == 'reindent tabs trees':
+            f = filters.ReindentFilter(char='\t', wrap_after=25, n='\r\n')
+            f.offset = 2
+            stack.stmtprocess.append(f)
+        elif kind == 'grouping off':
+            stack.stmtprocess.append(grouping_off(stack))
         elif kind == 'strip comments':
             stack.stmtprocess.append(filters.StripCommentsFilter())
         elif kind == 'preprocess':
             stack.preprocess.append(filters.KeywordCaseFilter('upper'))
-        if kind != 'trees':
+        if kind not in ('trees', 'aligned trees', 'aligned first', 'reindent trees', 'reindent first',
+                        'reindent tabs trees', 'grouping off'):
             stack.postprocess.append(filters.SerializerUnicode())
         return stack
 
+    def wrapped(s):
+        """The TokenList AlignedIndentFilter wraps a statement's tokens in: its slots, and whether it holds the
+        statement's own list."""
+        holders = {id(t.parent): t.parent for t in s.tokens if t.parent is not s}
+        return [(type(h).__name__, h.ttype, h.value, h.normalized, h.is_group, h.is_keyword, h.is_whitespace,
+                 h.is_newline, h.parent, h.tokens is s.tokens, len(h.tokens)) for h in holders.values()]
+
     def result(run, kind, text):
         stack = build(kind)
-        if kind == 'trees':
-            return [tree(s) for s in run(stack, text)]
-        if kind == 'first':
-            return next(iter(run(stack, text)), None)
-        return ''.join(run(stack, text))
+        filters_ = list(stack.stmtprocess)
+        if kind in ('trees', 'aligned trees', 'reindent trees', 'reindent tabs trees', 'grouping off'):
+            out = [(tree(s), wrapped(s)) for s in run(stack, text)]
+        elif kind in ('first', 'aligned first', 'reindent first'):
+            got = []
+            try:  # a statement, then the error (if any) of the next: sqlparse groups one at a time
+                for s in run(stack, text):
+                    got.append(tree(s))
+                    if len(got) == 2:
+                        break
+            except Exception as e:
+                got.append((type(e).__name__, str(e)))
+            out = got
+        else:
+            out = ''.join(run(stack, text))
+        return out, [{k: tree(v) if isinstance(v, sqlparse.sql.Token) else v for k, v in vars(f).items()}
+                     if hasattr(f, '__dict__') else None for f in filters_], last_func_in_tree(filters_, stack)
 
-    kinds = ['trees', 'aligned', 'reindent', 'strip comments', 'first', 'preprocess', 'no grouping']
+    def last_func_in_tree(filters_, stack):
+        """Whether a ReindentFilter's _last_func is the very token of its last statement (not an equal copy)."""
+        f = filters_[0] if filters_ else None
+        if type(f) is not filters.ReindentFilter or f._last_func is None or f._last_stmt is None:
+            return None
+        found, todo = False, [f._last_stmt]
+        while todo and not found:
+            t = todo.pop()
+            found = t is f._last_func
+            if t.is_group:
+                todo.extend(t.tokens)
+        return found
+
+    kinds = ['trees', 'aligned', 'aligned trees', 'aligned state', 'aligned first', 'reindent', 'reindent trees',
+             'reindent first', 'reindent html', 'reindent nbsp', 'reindent options', 'reindent tabs trees',
+             'grouping off', 'strip comments', 'first', 'preprocess', 'no grouping']
     grouped = 0
     for text in texts:
         for kind in kinds:
+            if kind == 'reindent nbsp' and len(text) > 200:
+                continue
             expect = plain(lambda: result(sqlparse_turbo._original_run, kind, text))
             before = counts['parse']
             got = outcome(lambda: result(sqlparse_turbo._run, kind, text))
@@ -620,12 +696,110 @@ def stacks():
             bad_add()
     finally:
         sqlparse_turbo.uninstall()
-    print(f'stacks: {len(texts)} texts x {len(kinds)} stacks, same as sqlparse run; {grouped} grouped in Rust')
+    # the Rust runs the filter itself on ordinary statements
+    state = ('\n', ' ', 0, 0, 6)
+    st = sqlparse_turbo._native.statements('select a, b from t where x = 1; select (select 1) from u')
+    if [st.next(state)[1], st.next(state)[1], st.next(state)] != [True, True, None]:
+        print('AlignedIndentFilter not run in Rust')
+        bad_add()
+    state = ('\n', ' ', 2, 0, 0, 0, False, False, False, None, None)
+    st = sqlparse_turbo._native.statements('select f(a, b) from t where x = 1; select (select 1) from u')
+    first, second = st.next(None, state), st.next(None, state)
+    if [first[1], second[1], st.next(None, state)] != [True, True, None] or first[2] is None or second[2] is not None:
+        print('ReindentFilter not run in Rust, or its _last_func not given back')
+        bad_add()
+    print(f'stacks: {len(texts)} texts x {len(kinds)} stacks (nbsp: the short ones), same as sqlparse run; '
+          f'{grouped} grouped in Rust')
+
+
+def read_inputs():
+    """Text streams and bytes: sqlparse's lexer reads the stream and decodes the bytes (encoding, else UTF-8, else
+    unicode-escape) before lexing; the package does the same, then runs the text in Rust."""
+    import io
+    from sqlparse import lexer
+    from sqlparse.engine import FilterStack
+    from sqlparse import filters
+
+    class Counted(io.TextIOBase):  # a stream that counts its reads and gives what it is told to
+        def __init__(self, value, fail=False):
+            self.value, self.fail, self.reads = value, fail, 0
+
+        def read(self, size=-1):
+            self.reads += 1
+            if self.fail:
+                raise ValueError('cannot read')
+            return self.value
+
+    paths = sorted(glob.glob(os.path.join(ROOT, 'bench', 'corpus', '*.sql')))[::16 if QUICK else 2]
+    texts = [open(p, encoding='utf-8').read() for p in paths]
+    texts += ['', 'select 1; select 2', 'sélect ñ from 表 -- é', 'BEGIN ' * 120 + 'END ' * 120]
+    forms = [
+        ('bytes', lambda t: (t.encode(), None), True),
+        ('bytes latin-1', lambda t: (t.encode('latin-1', 'replace'), 'latin-1'), True),
+        ('bytes utf-16', lambda t: (t.encode('utf-16'), 'utf-16'), True),
+        ('bytes not utf-8', lambda t: (t.encode() + b' \xff', None), True),
+        ('bytes bad escape', lambda t: (t.encode() + b' \\x \xff', None), False),
+        ('bytes bad encoding name', lambda t: (t.encode(), 'no-such-codec'), False),
+        ('StringIO', lambda t: (io.StringIO(t), None), True),
+        ('TextIOWrapper', lambda t: (io.TextIOWrapper(io.BytesIO(t.encode('utf-8'))), 'ignored'), True),
+        ('stream of bytes', lambda t: (Counted(t.encode()), None), True),
+        ('stream of str', lambda t: (Counted(t), None), True),
+        ('stream of an int', lambda t: (Counted(5), None), False),
+        ('stream that fails', lambda t: (Counted(t, fail=True), None), False),
+        ('bytearray', lambda t: (bytearray(t.encode()), None), False),
+    ]
+
+    def aligned_stack():
+        stack = FilterStack()
+        stack.enable_grouping()
+        stack.stmtprocess.append(filters.AlignedIndentFilter(char='&nbsp;', n='<br/>'))
+        stack.postprocess.append(filters.SerializerUnicode())
+        return stack
+
+    calls = [
+        ('format', lambda m, x, e: m.format(x, e, reindent=True, keyword_case='upper'), 'format'),
+        ('format bad option', lambda m, x, e: m.format(x, e, keyword_case='nope'), None),
+        ('split', lambda m, x, e: m.split(x, e), 'split'),
+        ('split strip', lambda m, x, e: m.split(x, e, strip_semicolon=True), 'split'),
+        ('parse', lambda m, x, e: [tree(s) for s in m.parse(x, e)], 'parse'),
+        ('parsestream', lambda m, x, e: [tree(s) for s in sqlparse.parsestream(x, e)], 'parse'),
+        ('tokenize', lambda m, x, e: list(lexer.tokenize(x, e)), 'lex'),
+        ('split_many', lambda m, x, e: m.split_many([x, 'a;b'], e) if m is sqlparse_turbo
+         else [sqlparse.split(x, e), sqlparse.split('a;b', e)], 'split'),
+        ('stack', lambda m, x, e: ''.join(aligned_stack().run(x, e)), 'parse'),
+    ]
+    n = rust = 0
+    for text in texts:
+        for form, make, runs in forms:
+            for what, call, counter in calls:
+                x, enc = make(text)
+                expect = plain(lambda: call(sqlparse, x, enc))
+                reads_a = getattr(x, 'reads', None)
+                where_a = x.tell() if isinstance(x, io.StringIO) else None
+                x, enc = make(text)
+                sqlparse_turbo.install()
+                rearm()
+                before = dict(counts)
+                try:
+                    got = outcome(lambda: call(sqlparse_turbo, x, enc))
+                finally:
+                    sqlparse_turbo.uninstall()
+                reads_b = getattr(x, 'reads', None)
+                where_b = x.tell() if isinstance(x, io.StringIO) else None
+                same(f'read {form} {what} {text[:30]!r}', (expect, reads_a, where_a), (got, reads_b, where_b))
+                n += 1
+                if counter and runs and expect[0] == 'ok' and 'BEGIN' not in text:
+                    if counts[counter] == before[counter] and (counter != 'split' or
+                                                               counts['split_many'] == before['split_many']):
+                        print(f'READ {form} {what} {text[:30]!r} DID NOT RUN IN RUST')
+                        bad_add()
+                    rust += 1
+    print(f'read: {n} calls on streams and bytes, same as sqlparse (result, error, reads); {rust} in Rust')
 
 
 PARTS = {'corpus': corpus, 'fallbacks': fallbacks, 'inert': inert_arguments, 'lexer': lexer_changes,
          'installed': installed, 'cli': cli, 'unicode': unicode_sweep, 'lexswap': lexer_swap, 'many': many,
-         'patches': patches, 'stacks': stacks}
+         'patches': patches, 'stacks': stacks, 'read': read_inputs}
 args = sys.argv[1:]
 QUICK = '--quick' in args
 chosen = [a for a in args if a != '--quick'] or list(PARTS)
