@@ -3,6 +3,11 @@
 Every version runs in Rust with sqlparse 0.6.1 and gives sqlparse's answers. Each change below was checked equal to
 sqlparse before release ([Verification](verification.md)).
 
+## 0.1.6 (2026-11-24)
+
+- Documentation only, the code is 0.1.5's: a short README with pictures (also on PyPI), the details in
+  [docs/](README.md), one page per subject, and `bench/quick_speed.py` to measure the speed-up yourself.
+
 ## 0.1.5 (2026-11-24)
 
 - **Memory.** `FilterStack.run` and `parsestream` lex one statement at a time instead of the whole text first.
