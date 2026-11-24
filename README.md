@@ -378,6 +378,10 @@ Python stack for the recursion limit).
   compares its lists object by object: `format('select 1', keyword_case='upper')` 2.7 → 2.2 µs, `split` 1.3 →
   1.0 µs.
 
+0.1.5 made `FilterStack.run` and `parsestream` hold what sqlparse's generators hold: the text and the statement
+being made. Each statement is lexed and split off when it is asked for, where 0.1.4 lexed the whole text first:
+iterating `parsestream` over 100,000 INSERT statements (5.5 MB) peaks at 55 MB, as sqlparse does (0.1.4: 410 MB).
+
 No single hot spot is left: the time is spread over the grouping passes that do run, the lexer and the indent
 filters. Going further would mean merging grouping passes, which sqlparse runs one after another over the whole
 tree and whose order the output depends on.

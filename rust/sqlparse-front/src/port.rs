@@ -54,15 +54,20 @@ pub fn parse_trees(sql: &str, run: bool) -> Result<Parsed, String> {
     format::parse(sql, &stack).map(Parsed)
 }
 
-/// Not part of the front door: `FilterStack.run`'s statements one at a time, as sqlparse's run gives them: the
-/// text is lexed and split at once (nothing in that can be seen from Python), each statement is grouped when it
-/// is asked for, with the recursion limit counted from where the caller then stands.
+/// Not part of the front door: `FilterStack.run`'s statements one at a time, as sqlparse's run gives them: each
+/// statement is lexed, split off and grouped when it is asked for, with the recursion limit counted from where
+/// the caller then stands. Only the text and one statement's tokens are held, as sqlparse's generators hold them.
 pub struct Lazy {
     text: String,
-    /// The tokens as (type, start, end) in `text`.
-    toks: Vec<(&'static str, usize, usize)>,
-    ranges: Vec<std::ops::Range<usize>>,
-    next: usize,
+    spans: lexer::Spans,
+    /// Where the lexer goes on from.
+    pos: usize,
+    splitter: split::Feed,
+    /// The first token of the next statement as (type, start, end) in `text`: read, and given to the splitter,
+    /// when it ended the statement before it.
+    pending: Option<(&'static str, usize, usize)>,
+    /// The statement `next` or `skip` last took, as (type, start, end) in `text`.
+    current: Vec<(&'static str, usize, usize)>,
 }
 
 /// A caller's own `AlignedIndentFilter` as found: `n`, `char`, `offset`, `indent`, `_max_kwd_len`.
@@ -133,32 +138,32 @@ const REINDENT_FRAMES_PER_LEVEL: usize = 4;
 const REINDENT_FRAMES: usize = 40;
 
 impl Lazy {
-    /// None if the lexer's tokens did not cover the text in order (they always do: each is a slice of it).
-    pub fn new(text: String) -> Option<Lazy> {
-        let (toks, ranges) = {
-            let tokens = lexer::tokenize(&text);
-            let ranges = split::statements(&tokens);
-            let base = text.as_ptr() as usize;
-            let mut at = 0;
-            let mut toks = Vec::with_capacity(tokens.len());
-            for (ttype, value) in &tokens {
-                if value.as_ptr() as usize != base + at {
-                    return None;
-                }
-                toks.push((*ttype, at, at + value.len()));
-                at += value.len();
-            }
-            if at != text.len() {
-                return None;
-            }
-            (toks, ranges)
-        };
-        Some(Lazy {
+    pub fn new(text: String) -> Lazy {
+        // sqlparse's lexer finds the delimited spans (dollar quotes, block comments) over the whole text first
+        let spans = lexer::find_delimited_spans(&text);
+        Lazy {
             text,
-            toks,
-            ranges,
-            next: 0,
-        })
+            spans,
+            pos: 0,
+            splitter: split::Feed::default(),
+            pending: None,
+            current: Vec::new(),
+        }
+    }
+
+    /// Lexes the next statement into `current`, as sqlparse's splitter cuts it; false after the last.
+    fn take(&mut self) -> bool {
+        self.current.clear();
+        self.current.extend(self.pending.take());
+        while let Some((ttype, end)) = lexer::token_at(&self.text, &self.spans, self.pos) {
+            let start = std::mem::replace(&mut self.pos, end);
+            if self.splitter.token(ttype, &self.text[start..end]) {
+                self.pending = Some((ttype, start, end));
+                return true;
+            }
+            self.current.push((ttype, start, end));
+        }
+        split::is_statement(self.current.iter().map(|&(ttype, _, _)| ttype))
     }
 
     /// The next statement grouped, then the caller's first statement filter (an `AlignedIndentFilter` or a
@@ -169,12 +174,12 @@ impl Lazy {
         aligned: Option<AlignedState>,
         reindent: Option<ReindentState>,
     ) -> Result<Option<Grouped>, String> {
-        let Some(range) = self.ranges.get(self.next).cloned() else {
+        if !self.take() {
             return Ok(None);
-        };
-        self.next += 1;
+        }
         let stack = python_stack_from(PARSE_ENTRY_FRAMES_311, RUN_FRAMES_311, RUN_FRAMES_312);
-        let view: Vec<(&'static str, &str)> = self.toks[range]
+        let view: Vec<(&'static str, &str)> = self
+            .current
             .iter()
             .map(|&(ttype, a, b)| (ttype, &self.text[a..b]))
             .collect();
@@ -256,24 +261,16 @@ impl Lazy {
 impl Lazy {
     /// Takes the next statement without grouping it (false after the last): `last_tokens` then gives it.
     pub fn skip(&mut self) -> bool {
-        if self.next < self.ranges.len() {
-            self.next += 1;
-            true
-        } else {
-            false
-        }
+        self.take()
     }
 
-    /// The tokens of the statement `next` last took, as (type name, text): for the package to make that
-    /// statement as sqlparse's splitter does when it is handed to sqlparse.
+    /// The tokens of the statement `next` or `skip` last took, as (type name, text): for the package to make
+    /// that statement as sqlparse's splitter does when it is handed to sqlparse.
     pub fn last_tokens(&self) -> Vec<(&'static str, &str)> {
-        match self.next.checked_sub(1).and_then(|i| self.ranges.get(i)) {
-            Some(range) => self.toks[range.clone()]
-                .iter()
-                .map(|&(ttype, a, b)| (ttype, &self.text[a..b]))
-                .collect(),
-            None => Vec::new(),
-        }
+        self.current
+            .iter()
+            .map(|&(ttype, a, b)| (ttype, &self.text[a..b]))
+            .collect()
     }
 }
 

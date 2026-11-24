@@ -158,13 +158,14 @@ fn keyword_type(value: &str) -> &'static str {
     find(super::pystr::upper(value).as_bytes())
 }
 
-/// `keywords.DelimitedSpans`: openers by start, closers by tag.
-struct Spans<'a> {
-    openers: HashMap<usize, (usize, &'a str, &'static str)>,
-    closers: HashMap<&'a str, (Vec<usize>, Vec<usize>)>,
+/// `keywords.DelimitedSpans`: openers by start (opener's end, tag, token type), closers by tag. A tag is
+/// kept as its index in `closers` (one per distinct tag text), so the spans hold no borrow of the text.
+pub(crate) struct Spans {
+    openers: HashMap<usize, (usize, usize, &'static str)>,
+    closers: Vec<(Vec<usize>, Vec<usize>)>,
 }
 
-impl Spans<'_> {
+impl Spans {
     fn resolve(&self, pos: usize) -> Option<(usize, &'static str)> {
         if self.openers.is_empty() {
             return None;
@@ -176,12 +177,25 @@ impl Spans<'_> {
     }
 }
 
+/// The index in `closers` of a tag's text, a new (empty) entry the first time it is seen.
+fn tag_index<'a>(
+    tags: &mut HashMap<&'a str, usize>,
+    closers: &mut Vec<(Vec<usize>, Vec<usize>)>,
+    tag: &'a str,
+) -> usize {
+    *tags.entry(tag).or_insert_with(|| {
+        closers.push(Default::default());
+        closers.len() - 1
+    })
+}
+
 /// `keywords.find_delimited_spans`.
-fn find_delimited_spans(text: &str) -> Spans<'_> {
+pub(crate) fn find_delimited_spans(text: &str) -> Spans {
     let mut spans = Spans {
         openers: HashMap::new(),
-        closers: HashMap::new(),
+        closers: Vec::new(),
     };
+    let mut tags: HashMap<&str, usize> = HashMap::new();
     let has_dollar = text.contains('$');
     let has_comment_open = text.contains("/*");
     if has_dollar {
@@ -190,8 +204,8 @@ fn find_delimited_spans(text: &str) -> Spans<'_> {
                 continue;
             };
             let end = start + m.end();
-            let tag = &text[start..end];
-            let (starts, ends) = spans.closers.entry(tag).or_default();
+            let tag = tag_index(&mut tags, &mut spans.closers, &text[start..end]);
+            let (starts, ends) = &mut spans.closers[tag];
             starts.push(start);
             ends.push(end);
             let opens = text[..start]
@@ -204,11 +218,11 @@ fn find_delimited_spans(text: &str) -> Spans<'_> {
         }
     }
     if has_comment_open {
+        let tag = tag_index(&mut tags, &mut spans.closers, COMMENT_TAG);
         for (start, _) in text.match_indices("/*+") {
-            spans.openers.insert(
-                start,
-                (start + 3, COMMENT_TAG, "Token.Comment.Multiline.Hint"),
-            );
+            spans
+                .openers
+                .insert(start, (start + 3, tag, "Token.Comment.Multiline.Hint"));
         }
         for (start, _) in text.match_indices("/*") {
             if text[start + 2..].starts_with('+') {
@@ -216,9 +230,9 @@ fn find_delimited_spans(text: &str) -> Spans<'_> {
             }
             spans
                 .openers
-                .insert(start, (start + 2, COMMENT_TAG, "Token.Comment.Multiline"));
+                .insert(start, (start + 2, tag, "Token.Comment.Multiline"));
         }
-        let (starts, ends) = spans.closers.entry(COMMENT_TAG).or_default();
+        let (starts, ends) = &mut spans.closers[tag];
         for (start, _) in text.match_indices("*/") {
             starts.push(start);
             ends.push(start + 2);
@@ -512,80 +526,75 @@ pub(crate) fn type_names() -> Vec<&'static str> {
 /// `sqlparse.lexer.tokenize(text)`: (token type, text) pairs.
 pub(crate) fn tokenize(text: &str) -> Vec<(&'static str, &str)> {
     let spans = find_delimited_spans(text);
-    let rules = rules();
     let mut out = Vec::new();
     let mut pos = 0;
-    'outer: while pos < text.len() {
-        if let Some((end, ttype)) = spans.resolve(pos) {
-            out.push((ttype, &text[pos..end]));
-            pos = end;
-            continue;
-        }
-        if text.as_bytes()[pos] < 0x80 {
-            match fast_token(text.as_bytes(), pos) {
-                Fast::Token(ttype, len) => {
-                    out.push((ttype, &text[pos..pos + len]));
-                    pos += len;
-                    continue;
-                }
-                Fast::Phrase(list, len) => {
-                    let rest = &text[pos..];
-                    for &i in list {
-                        let rule = &rules.all[i];
-                        if rule.prefilter.as_ref().is_some_and(|p| !p.is_match(rest)) {
-                            continue;
-                        }
-                        if let Ok(Some(m)) = rule.re.find(rest) {
-                            let ttype = match rule.action {
-                                Action::Token(t) => t,
-                                Action::Keyword => keyword_type(&rest[..m.end()]),
-                            };
-                            out.push((ttype, &rest[..m.end()]));
-                            pos += m.end();
-                            continue 'outer;
-                        }
-                    }
-                    out.push((keyword_type(&rest[..len]), &rest[..len]));
-                    pos += len;
-                    continue;
-                }
-                Fast::Rules => {}
-            }
-        }
-        let prev = text[..pos].chars().next_back();
-        let rest = &text[pos..];
-        let Some(here) = rest.chars().next() else {
-            break;
-        };
-        for rule in rules.candidates(here) {
-            let allowed = match rule.before {
-                Before::Any => true,
-                Before::In(r) => prev.is_some_and(|c| in_ranges(r, c)),
-                Before::NotIn(r) => prev.is_none_or(|c| !in_ranges(r, c)),
-            };
-            if !allowed {
-                continue;
-            }
-            if rule.prefilter.as_ref().is_some_and(|p| !p.is_match(rest)) {
-                continue;
-            }
-            let Ok(Some(m)) = rule.re.find(rest) else {
-                continue;
-            };
-            let value = &rest[..m.end()];
-            let ttype = match rule.action {
-                Action::Token(t) => t,
-                Action::Keyword => keyword_type(value),
-            };
-            out.push((ttype, value));
-            pos += m.end();
-            continue 'outer;
-        }
-        let c = here.len_utf8();
-        out.push(("Token.Error", &rest[..c]));
-        pos += c;
+    while let Some((ttype, end)) = token_at(text, &spans, pos) {
+        out.push((ttype, &text[pos..end]));
+        pos = end;
     }
     out
+}
+
+/// The token the lexer finds at `pos` (where the one before it ended): its type and where it ends. None at the
+/// end of the text. `spans` is `find_delimited_spans(text)`.
+#[inline]
+pub(crate) fn token_at(text: &str, spans: &Spans, pos: usize) -> Option<(&'static str, usize)> {
+    if pos >= text.len() {
+        return None;
+    }
+    if let Some((end, ttype)) = spans.resolve(pos) {
+        return Some((ttype, end));
+    }
+    if text.as_bytes()[pos] < 0x80 {
+        match fast_token(text.as_bytes(), pos) {
+            Fast::Token(ttype, len) => return Some((ttype, pos + len)),
+            Fast::Phrase(list, len) => {
+                let rules = rules();
+                let rest = &text[pos..];
+                for &i in list {
+                    let rule = &rules.all[i];
+                    if rule.prefilter.as_ref().is_some_and(|p| !p.is_match(rest)) {
+                        continue;
+                    }
+                    if let Ok(Some(m)) = rule.re.find(rest) {
+                        let ttype = match rule.action {
+                            Action::Token(t) => t,
+                            Action::Keyword => keyword_type(&rest[..m.end()]),
+                        };
+                        return Some((ttype, pos + m.end()));
+                    }
+                }
+                return Some((keyword_type(&rest[..len]), pos + len));
+            }
+            Fast::Rules => {}
+        }
+    }
+    let rules = rules();
+    let prev = text[..pos].chars().next_back();
+    let rest = &text[pos..];
+    let here = rest.chars().next()?;
+    for rule in rules.candidates(here) {
+        let allowed = match rule.before {
+            Before::Any => true,
+            Before::In(r) => prev.is_some_and(|c| in_ranges(r, c)),
+            Before::NotIn(r) => prev.is_none_or(|c| !in_ranges(r, c)),
+        };
+        if !allowed {
+            continue;
+        }
+        if rule.prefilter.as_ref().is_some_and(|p| !p.is_match(rest)) {
+            continue;
+        }
+        let Ok(Some(m)) = rule.re.find(rest) else {
+            continue;
+        };
+        let ttype = match rule.action {
+            Action::Token(t) => t,
+            Action::Keyword => keyword_type(&rest[..m.end()]),
+        };
+        return Some((ttype, pos + m.end()));
+    }
+    Some(("Token.Error", pos + here.len_utf8()))
 }
 
 #[cfg(test)]

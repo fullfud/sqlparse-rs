@@ -64,6 +64,7 @@ jobs:
           python-version: "3.12"
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b  # v1
         with:
+          maturin-version: v1.16.0  # the published wheels come from this exact maturin
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux || 'auto' }}
           container: ${{ matrix.zig && 'off' || '' }}
@@ -81,6 +82,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b  # v1
         with:
+          maturin-version: v1.16.0  # the published wheels come from this exact maturin
           command: sdist
           args: --out dist
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6

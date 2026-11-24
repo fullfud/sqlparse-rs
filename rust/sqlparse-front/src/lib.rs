@@ -420,12 +420,11 @@ fn gc_paused<'py, T>(py: Python<'py>, make: impl FnOnce() -> PyResult<T>) -> PyR
     make()
 }
 
-/// `statements`: a caller's `FilterStack.run` with grouping, one statement at a time (see `port::Lazy`); None if
-/// the text cannot be taken (never expected).
+/// `statements`: a caller's `FilterStack.run` with grouping, one statement at a time (see `port::Lazy`).
 #[pyfunction]
 #[pyo3(name = "statements", signature = (sql))]
-fn statements(sql: String) -> Option<Statements> {
-    port::Lazy::new(sql).map(Statements)
+fn statements(sql: String) -> Statements {
+    Statements(port::Lazy::new(sql))
 }
 
 #[pyclass(name = "Statements", module = "sqlparse_turbo._native")]

@@ -196,17 +196,19 @@ impl Splitter {
     }
 }
 
-/// `StatementSplitter().process(tokenize(text))`: each statement as the range of tokens it holds.
-pub(crate) fn statements(tokens: &[(&'static str, &str)]) -> Vec<std::ops::Range<usize>> {
-    let mut out = Vec::new();
-    let mut s = Splitter::default();
-    let mut start = 0;
-    for (i, &(ttype, value)) in tokens.iter().enumerate() {
-        if s.consume_ws && ttype != WHITESPACE && ttype != COMMENT_SINGLE {
-            out.push(start..i);
-            s = Splitter::default();
-            start = i;
+/// `StatementSplitter.process`, fed one token at a time.
+#[derive(Default)]
+pub(crate) struct Feed(Splitter);
+
+impl Feed {
+    /// Takes the next token; true when a statement ended before it (the token then starts the next one).
+    pub(crate) fn token(&mut self, ttype: &'static str, value: &str) -> bool {
+        let mut ended = false;
+        if self.0.consume_ws && ttype != WHITESPACE && ttype != COMMENT_SINGLE {
+            self.0 = Splitter::default();
+            ended = true;
         }
+        let s = &mut self.0;
         s.level += s.change_splitlevel(ttype, value);
         if ttype == PUNCTUATION && value == ";" {
             s.seen_begin = false;
@@ -222,9 +224,33 @@ pub(crate) fn statements(tokens: &[(&'static str, &str)]) -> Vec<std::ops::Range
         {
             s.seen_begin = false;
         }
+        ended
     }
-    let rest = &tokens[start..];
-    if !rest.is_empty() && !rest.iter().all(|(t, _)| is_a(t, WHITESPACE)) {
+}
+
+/// Whether the tokens left at the end of the text make a statement: sqlparse's splitter drops them when they
+/// are all whitespace.
+pub(crate) fn is_statement<'a>(mut types: impl Iterator<Item = &'a str>) -> bool {
+    let mut any = false;
+    let all_ws = types.all(|t| {
+        any = true;
+        is_a(t, WHITESPACE)
+    });
+    any && !all_ws
+}
+
+/// `StatementSplitter().process(tokenize(text))`: each statement as the range of tokens it holds.
+pub(crate) fn statements(tokens: &[(&'static str, &str)]) -> Vec<std::ops::Range<usize>> {
+    let mut out = Vec::new();
+    let mut feed = Feed::default();
+    let mut start = 0;
+    for (i, &(ttype, value)) in tokens.iter().enumerate() {
+        if feed.token(ttype, value) {
+            out.push(start..i);
+            start = i;
+        }
+    }
+    if is_statement(tokens[start..].iter().map(|&(t, _)| t)) {
         out.push(start..tokens.len());
     }
     out

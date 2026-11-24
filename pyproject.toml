@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "sqlparse-turbo"
-version = "0.1.4"
+version = "0.1.5"
 description = "sqlparse 0.6.1's format(), split() and parse() rewritten in Rust: same output, byte for byte, many times faster"
 readme = "README.md"
 license = "BSD-3-Clause"
